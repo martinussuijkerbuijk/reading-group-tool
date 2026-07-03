@@ -7,7 +7,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
   const [anns, setAnns] = useState<Annotation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ exact: string; prefix?: string; suffix?: string } | null>(null);
+  const [draft, setDraft] = useState<{ exact: string; prefix?: string; suffix?: string; rect: { top: number; left: number } } | null>(null);
   const [draftType, setDraftType] = useState<AnnotationBodyType>('comment');
   const [draftText, setDraftText] = useState('');
   const [draftTags, setDraftTags] = useState('');
@@ -147,8 +147,16 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
 
   function onMouseUp() {
     if (!contentRef.current) return;
-    const sel = selectionToSelector(contentRef.current);
-    if (sel && sel.exact.length > 1) setDraft(sel);
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    const result = selectionToSelector(contentRef.current);
+    if (result && result.exact.length > 1) {
+      // Position the popover just below the selection end, in viewport coords.
+      // Using fixed positioning so it stays put regardless of scroll.
+      setDraft({ ...result, rect: { top: rect.bottom + 8, left: rect.left } });
+    }
   }
 
   async function submitDraft() {
@@ -202,14 +210,30 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
 
         <div
           ref={contentRef}
-          className="cr-prose"
+          className="cr-prose select-text"
           onMouseUp={onMouseUp}
           dangerouslySetInnerHTML={{ __html: doc.html }}
         />
 
+        {doc.html.replace(/<[^>]*>/g, '').trim().length === 0 && (
+          <div className="mt-4 p-4 border rounded bg-red-50 text-sm text-red-700">
+            ⚠ No selectable text was extracted from this PDF. This can happen with scanned
+            PDFs (images only). Try a text-based PDF, or check the server console for ingestion errors.
+          </div>
+        )}
+
         {draft && (
-          <div className="mt-4 p-4 border rounded bg-amber-50">
-            <div className="text-xs text-slate-500 mb-1">Annotating:</div>
+          <div
+            className="fixed z-50 w-80 bg-white border border-amber-300 rounded-lg shadow-xl p-3"
+            style={{
+              top: Math.min(draft.rect.top, window.innerHeight - 260),
+              left: Math.max(12, Math.min(draft.rect.left, window.innerWidth - 340)),
+            }}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-xs text-slate-500">Annotating:</div>
+              <button onClick={() => setDraft(null)} className="text-xs text-slate-400 hover:text-slate-700">✕</button>
+            </div>
             <div className="text-sm italic mb-3 line-clamp-2">“{draft.exact}”</div>
             <div className="flex flex-wrap gap-2 mb-2">
               <select value={draftType} onChange={(e) => setDraftType(e.target.value as AnnotationBodyType)} className="border rounded px-2 py-1 text-sm">
@@ -258,7 +282,15 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
             return (
               <li key={a.id} id={'ann-' + a.id}
                   className={`p-3 border rounded ${activeId === a.id ? 'border-amber-400 bg-amber-50' : 'hover:bg-slate-50'}`}>
-                <div className="flex items-center justify-between cursor-pointer" onClick={() => setActiveId(a.id === activeId ? null : a.id)}>
+                <div className="flex items-center justify-between cursor-pointer" onClick={() => {
+                  const newId = a.id === activeId ? null : a.id;
+                  setActiveId(newId);
+                  if (newId) {
+                    // scroll the document highlight into view
+                    const mark = contentRef.current?.querySelector(`mark.cr-highlight[data-ann-id="${a.id}"]`);
+                    mark?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }
+                }}>
                   <span className="text-xs px-1.5 py-0.5 rounded bg-slate-200 capitalize">{a.body.type}</span>
                   <span className="text-xs text-slate-400">{a.creator}</span>
                 </div>

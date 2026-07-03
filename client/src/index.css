@@ -9,6 +9,10 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+.cr-prose {
+  user-select: text;
+  -webkit-user-select: text;
+}
 .cr-prose p {
   margin: 0 0 1.1em;
   line-height: 1.75;
