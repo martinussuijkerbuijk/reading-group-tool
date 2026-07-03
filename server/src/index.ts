@@ -1,9 +1,12 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { serveStatic } from 'hono/bun';
+import { createBunWebSocket } from 'hono/bun';
 import db from './db.ts';
 import { pdfToHtml } from './ingest.ts';
+import { join, leave, broadcastAnnotation } from './realtime.ts';
 import type { Annotation, DocumentRecord, Group } from '@cr/shared';
+
+const { upgradeWebSocket, websocket } = createBunWebSocket();
 
 const app = new Hono();
 app.use('*', cors());
@@ -143,15 +146,34 @@ app.post('/api/documents/:id/annotations', async (c) => {
      ann.target.selector[0].exact, ann.target.selector[0].prefix ?? null, ann.target.selector[0].suffix ?? null,
      JSON.stringify(ann.tags), ann.parentId, ann.provenance, ann.createdAt],
   );
+  broadcastAnnotation(documentId, 'created', ann);
   return c.json(ann, 201);
 });
 
 app.delete('/api/annotations/:annId', (c) => {
+  const row = db.query('SELECT document_id FROM annotations WHERE id = ?').get(c.req.param('annId')) as any;
   db.run('DELETE FROM annotations WHERE id = ?', [c.req.param('annId')]);
+  if (row?.document_id) broadcastAnnotation(row.document_id, 'deleted', { id: c.req.param('annId') });
   return c.json({ ok: true });
 });
 
+// ---- WebSocket: realtime presence + annotation sync ----
+app.get('/ws', upgradeWebSocket((c) => {
+  const docId = c.req.query('docId') ?? '';
+  const userName = c.req.header('x-user') || c.req.query('user') || 'anonymous';
+  let peer: ReturnType<typeof join> | null = null;
+  return {
+    onOpen(_ev, ws) {
+      if (!docId) { ws.close(); return; }
+      peer = join(docId, userName, ws);
+    },
+    onClose() {
+      if (peer) leave(peer);
+    },
+  };
+}));
+
 const port = Number(process.env.PORT ?? 3001);
-export default { port, fetch: app.fetch };
+export default { port, fetch: app.fetch, websocket };
 
 console.log(`Collective Reading API → http://localhost:${port}`);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Annotation, AnnotationBodyType, DocumentRecord } from '@cr/shared';
 import { createAnnotation, deleteAnnotation, getDocument, listAnnotations, selectionToSelector } from '../api.ts';
+import { useRealtime } from '../useRealtime.ts';
 
 export function Reader({ docId, onBack }: { docId: string; onBack: () => void }) {
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
@@ -20,6 +21,12 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     setDoc(d); setAnns(a);
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [docId]);
+
+  // Realtime: live annotation sync + presence
+  const { presentUsers, me } = useRealtime(docId, {
+    onAnnotationCreated: (ann) => setAnns((a) => a.some((x) => x.id === ann.id) ? a : [...a, ann]),
+    onAnnotationDeleted: (id) => setAnns((a) => a.filter((x) => x.id !== id && x.parentId !== id)),
+  });
 
   // ---- Highlight rendering: wrap annotated text in <mark> using TextQuoteSelector ----
   // Walks text nodes after render; uses prefix/suffix to disambiguate multiple matches.
@@ -181,12 +188,16 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const top = anns.filter((a) => !a.parentId);
   const filtered = filterType === 'all' ? top : top.filter((a) => a.body.type === filterType);
   const allTags = useMemo(() => Array.from(new Set(anns.flatMap((a) => a.tags))).sort(), [anns]);
+  const presentList = [me, ...presentUsers.filter((u) => u !== me)];
 
   return (
     <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8">
       <div>
         <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800 mb-3">← library</button>
-        <h1 className="text-2xl font-bold mb-6">{doc.title}</h1>
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-bold">{doc.title}</h1>
+          <PresenceBar users={presentList} me={me} />
+        </div>
 
         <div
           ref={contentRef}
@@ -289,6 +300,22 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
           })}
         </ul>
       </aside>
+    </div>
+  );
+}
+
+function PresenceBar({ users, me }: { users: string[]; me: string }) {
+  const palette = ['bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500'];
+  return (
+    <div className="flex items-center gap-1.5" title={`${users.length} reading now`}>
+      {users.slice(0, 6).map((u, i) => (
+        <div key={u} className={`${palette[i % palette.length]} text-white text-xs font-medium rounded-full w-7 h-7 flex items-center justify-center ring-2 ring-white`}
+          title={u === me ? `${u} (you)` : u}>
+          {u.slice(0, 2).toUpperCase()}
+        </div>
+      ))}
+      {users.length > 6 && <span className="text-xs text-slate-400">+{users.length - 6}</span>}
+      <span className="text-xs text-slate-400 ml-1">{users.length === 1 ? 'just you' : `${users.length} reading`}</span>
     </div>
   );
 }
