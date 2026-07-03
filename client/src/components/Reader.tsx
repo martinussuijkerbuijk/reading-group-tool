@@ -183,12 +183,13 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     if (activeId === annId) setActiveId(null);
   }
 
+  const allTags = useMemo(() => Array.from(new Set(anns.flatMap((a) => a.tags))).sort(), [anns]);
+  const presentList = [me, ...presentUsers.filter((u) => u !== me)];
+
   if (!doc) return <div className="p-6 text-slate-500">Loading…</div>;
 
   const top = anns.filter((a) => !a.parentId);
   const filtered = filterType === 'all' ? top : top.filter((a) => a.body.type === filterType);
-  const allTags = useMemo(() => Array.from(new Set(anns.flatMap((a) => a.tags))).sort(), [anns]);
-  const presentList = [me, ...presentUsers.filter((u) => u !== me)];
 
   return (
     <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8">
