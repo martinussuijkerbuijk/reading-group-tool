@@ -113,7 +113,8 @@ app.post('/api/documents/:id/annotations', async (c) => {
   const documentId = c.req.param('id');
   const body = await c.req.json();
   const sel = body?.target?.selector?.[0];
-  if (!sel?.exact) return c.json({ error: 'target.selector[0].exact required' }, 400);
+  // exact may be empty for replies (which inherit the parent's target)
+  if (!sel || typeof sel.exact !== 'string') return c.json({ error: 'target.selector[0].exact required' }, 400);
 
   const ann: Annotation = {
     id: newId(),
