@@ -1,0 +1,12 @@
+node_modules/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+uploads/
+dist/
+.vite/
+.DS_Store
+
+# pi-crew orchestration state
+.crew/

@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.cr-prose p {
+  margin: 0 0 1.1em;
+  line-height: 1.75;
+  font-size: 1.05rem;
+}
+
+mark.cr-highlight {
+  background: #fde68a;
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+mark.cr-highlight.cr-active {
+  background: #f59e0b;
+}

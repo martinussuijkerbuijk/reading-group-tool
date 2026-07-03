@@ -1,0 +1,12 @@
+{
+  "name": "collective-reading",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["client", "server", "shared"],
+  "scripts": {
+    "dev:server": "bun --cwd server run dev",
+    "dev:client": "bun --cwd client run dev",
+    "dev": "echo 'Run: bun run dev:server  AND  bun run dev:client (two terminals)'",
+    "build": "bun run --filter '@cr/client' build"
+  }
+}
