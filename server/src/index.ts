@@ -150,7 +150,7 @@ app.delete('/api/annotations/:annId', (c) => {
   return c.json({ ok: true });
 });
 
-const port = Number(process.env.PORT ?? 3000);
+const port = Number(process.env.PORT ?? 3001);
 export default { port, fetch: app.fetch };
 
 console.log(`Collective Reading API → http://localhost:${port}`);
