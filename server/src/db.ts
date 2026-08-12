@@ -38,6 +38,32 @@ CREATE TABLE IF NOT EXISTS annotations (
 );
 CREATE INDEX IF NOT EXISTS idx_ann_doc ON annotations(document_id);
 CREATE INDEX IF NOT EXISTS idx_ann_parent ON annotations(parent_id);
+
+CREATE TABLE IF NOT EXISTS canvas_nodes (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+  x REAL NOT NULL DEFAULT 0,
+  y REAL NOT NULL DEFAULT 0,
+  width REAL NOT NULL DEFAULT 260,
+  height REAL,
+  created_by TEXT NOT NULL DEFAULT 'you',
+  created_at TEXT NOT NULL,
+  UNIQUE(document_id, annotation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_canvas_doc ON canvas_nodes(document_id);
+
+CREATE TABLE IF NOT EXISTS canvas_edges (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  source_annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+  target_annotation_id TEXT NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+  label TEXT,
+  created_by TEXT NOT NULL DEFAULT 'you',
+  created_at TEXT NOT NULL,
+  UNIQUE(document_id, source_annotation_id, target_annotation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_edge_doc ON canvas_edges(document_id);
 `);
 
 // Migration: add position columns if they don't exist (for existing DBs)

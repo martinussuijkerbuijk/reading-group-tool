@@ -1,4 +1,4 @@
-import type { Annotation, DocumentRecord, Group } from '@cr/shared';
+import type { Annotation, CanvasNode, CanvasEdge, DocumentRecord, Group } from '@cr/shared';
 
 const USER = 'you'; // Phase 0 single-user
 
@@ -47,6 +47,33 @@ export async function createAnnotation(docId: string, body: Partial<Annotation>)
 }
 export async function deleteAnnotation(annId: string): Promise<void> {
   await fetch(`/api/annotations/${annId}`, { method: 'DELETE', headers: { 'x-user': USER } });
+}
+
+// ---- Canvas API ----
+export async function getCanvasNodes(docId: string): Promise<CanvasNode[]> {
+  const r = await fetch(`/api/documents/${docId}/canvas/nodes`);
+  return r.json();
+}
+export async function upsertCanvasNode(docId: string, annotationId: string, x: number, y: number, width?: number, height?: number): Promise<CanvasNode> {
+  const r = await fetch(`/api/documents/${docId}/canvas/nodes`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-user': USER },
+    body: JSON.stringify({ annotationId, x, y, width, height }),
+  });
+  return r.json();
+}
+export async function getCanvasEdges(docId: string): Promise<CanvasEdge[]> {
+  const r = await fetch(`/api/documents/${docId}/canvas/edges`);
+  return r.json();
+}
+export async function createCanvasEdge(docId: string, sourceAnnotationId: string, targetAnnotationId: string, label?: string): Promise<CanvasEdge> {
+  const r = await fetch(`/api/documents/${docId}/canvas/edges`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user': USER },
+    body: JSON.stringify({ sourceAnnotationId, targetAnnotationId, label }),
+  });
+  return r.json();
+}
+export async function deleteCanvasEdge(edgeId: string): Promise<void> {
+  await fetch(`/api/canvas/edges/${edgeId}`, { method: 'DELETE', headers: { 'x-user': USER } });
 }
 
 // Build W3C selectors from the current browser selection within a container.

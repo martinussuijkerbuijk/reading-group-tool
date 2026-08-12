@@ -44,6 +44,42 @@ mark.cr-type-question { background: rgba(191, 219, 254, 0.7); border-bottom-colo
 mark.cr-type-highlight{ background: rgba(167, 243, 208, 0.7); border-bottom-color: rgba(5, 150, 105, 0.4); }
 mark.cr-type-note     { background: rgba(221, 214, 254, 0.7); border-bottom-color: rgba(124, 58, 237, 0.4); }
 
+/* Markdown in annotations */
+.cr-markdown { font-size: 0.875rem; line-height: 1.5; }
+.cr-markdown h1, .cr-markdown h2, .cr-markdown h3 { font-weight: 600; margin: 0.5em 0 0.25em; line-height: 1.3; }
+.cr-markdown h1 { font-size: 1.15rem; }
+.cr-markdown h2 { font-size: 1.05rem; }
+.cr-markdown h3 { font-size: 0.95rem; }
+.cr-markdown a { color: #2563eb; text-decoration: underline; }
+.cr-markdown a:hover { color: #1d4ed8; }
+.cr-markdown ul, .cr-markdown ol { margin: 0.25em 0; padding-left: 1.2em; }
+.cr-markdown li { margin: 0.1em 0; }
+.cr-markdown blockquote {
+  border-left: 3px solid #d1d5db;
+  padding-left: 0.75em;
+  margin: 0.4em 0;
+  color: #6b7280;
+  font-style: italic;
+}
+.cr-markdown code {
+  background: #f3f4f6;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: ui-monospace, monospace;
+}
+.cr-markdown pre {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.5em 0.75em;
+  overflow-x: auto;
+  margin: 0.4em 0;
+}
+.cr-markdown pre code { background: none; padding: 0; }
+.cr-markdown p:last-child { margin-bottom: 0; }
+.cr-markdown p { margin: 0.3em 0; }
+
 /* Reading progress bar */
 .cr-progress {
   position: fixed;

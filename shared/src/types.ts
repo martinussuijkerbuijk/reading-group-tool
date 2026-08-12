@@ -57,3 +57,25 @@ export interface Group {
   name: string;
   createdAt: string;
 }
+
+export interface CanvasNode {
+  id: string;
+  documentId: string;
+  annotationId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CanvasEdge {
+  id: string;
+  documentId: string;
+  sourceAnnotationId: string;
+  targetAnnotationId: string;
+  label: string | null;
+  createdBy: string;
+  createdAt: string;
+}

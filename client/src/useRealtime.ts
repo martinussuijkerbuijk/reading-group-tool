@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Annotation } from '@cr/shared';
+import type { Annotation, CanvasNode, CanvasEdge } from '@cr/shared';
 
 const USER = 'you'; // Phase 0 single-user identity
 
@@ -7,11 +7,16 @@ type RealtimeEvent =
   | { type: 'presence'; users: string[] }
   | { type: 'peer-joined'; user: string }
   | { type: 'peer-left'; user: string }
-  | { type: 'annotation'; event: 'created' | 'deleted'; annotation: Annotation | { id: string } };
+  | { type: 'annotation'; event: 'created' | 'deleted'; annotation: Annotation | { id: string } }
+  | { type: 'canvas'; event: 'node-created' | 'node-updated' | 'edge-created' | 'edge-deleted'; data: CanvasNode | CanvasEdge | { id: string } };
 
 export function useRealtime(docId: string, opts: {
   onAnnotationCreated: (ann: Annotation) => void;
   onAnnotationDeleted: (id: string) => void;
+  onCanvasNodeCreated?: (node: CanvasNode) => void;
+  onCanvasNodeUpdated?: (node: CanvasNode) => void;
+  onCanvasEdgeCreated?: (edge: CanvasEdge) => void;
+  onCanvasEdgeDeleted?: (id: string) => void;
 }) {
   const [presentUsers, setPresentUsers] = useState<string[]>([]);
   const optsRef = useRef(opts);
@@ -44,6 +49,12 @@ export function useRealtime(docId: string, opts: {
           } else if (msg.event === 'deleted' && 'id' in msg.annotation) {
             optsRef.current.onAnnotationDeleted((msg.annotation as { id: string }).id);
           }
+          break;
+        case 'canvas':
+          if (msg.event === 'node-created' && 'annotationId' in msg.data) optsRef.current.onCanvasNodeCreated?.(msg.data as CanvasNode);
+          else if (msg.event === 'node-updated' && 'annotationId' in msg.data) optsRef.current.onCanvasNodeUpdated?.(msg.data as CanvasNode);
+          else if (msg.event === 'edge-created' && 'sourceAnnotationId' in msg.data) optsRef.current.onCanvasEdgeCreated?.(msg.data as CanvasEdge);
+          else if (msg.event === 'edge-deleted' && 'id' in msg.data) optsRef.current.onCanvasEdgeDeleted?.((msg.data as { id: string }).id);
           break;
       }
     };

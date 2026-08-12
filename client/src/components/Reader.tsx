@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Annotation, AnnotationBodyType, DocumentRecord } from '@cr/shared';
 import { createAnnotation, deleteAnnotation, getDocument, listAnnotations, selectionToSelector } from '../api.ts';
 import { useRealtime } from '../useRealtime.ts';
+import { Markdown } from './Markdown.tsx';
+import { Canvas } from './Canvas.tsx';
 
 export function Reader({ docId, onBack }: { docId: string; onBack: () => void }) {
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
@@ -12,6 +14,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [draftText, setDraftText] = useState('');
   const [draftTags, setDraftTags] = useState('');
   const [filterType, setFilterType] = useState<AnnotationBodyType | 'all'>('all');
+  const [viewMode, setViewMode] = useState<'reader' | 'canvas'>('reader');
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const contentRef = useRef<HTMLDivElement>(null);
@@ -233,15 +236,27 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const top = anns.filter((a) => !a.parentId);
   const filtered = filterType === 'all' ? top : top.filter((a) => a.body.type === filterType);
 
+  if (viewMode === 'canvas' && doc) {
+    return <Canvas docId={doc.id} annotations={anns} onBack={() => setViewMode('reader')} />;
+  }
+
   return (
     <>
     <div className="cr-progress" style={{ width: `${progress}%` }} />
     <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8">
       <div>
-        <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800 mb-3">← library</button>
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800">← library</button>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border overflow-hidden">
+              <button onClick={() => setViewMode('reader')} className={`px-3 py-1 text-xs ${viewMode === 'reader' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>📖 Reader</button>
+              <button onClick={() => setViewMode('canvas')} className={`px-3 py-1 text-xs ${viewMode === 'canvas' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>🔲 Canvas</button>
+            </div>
+            <PresenceBar users={presentList} me={me} />
+          </div>
+        </div>
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-bold">{doc.title}</h1>
-          <PresenceBar users={presentList} me={me} />
         </div>
 
         {/* Type count badges */}
@@ -294,7 +309,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                 className="border rounded px-2 py-1 text-sm flex-1 min-w-[140px]" />
             </div>
             <textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} rows={3}
-              placeholder="Your note…" className="w-full border rounded p-2 text-sm mb-2" />
+              placeholder="Your note…  (markdown supported: # heading, [link](url), **bold**)" className="w-full border rounded p-2 text-sm mb-1" />
             <div className="flex gap-2">
               <button onClick={submitDraft} className="px-3 py-1.5 bg-slate-800 text-white rounded text-sm">Save</button>
               <button onClick={() => setDraft(null)} className="px-3 py-1.5 text-sm text-slate-500">Cancel</button>
@@ -350,7 +365,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                 {a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')?.exact && (
                   <div className="text-xs italic text-slate-500 mt-1 line-clamp-2">“{a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')!.exact}”</div>
                 )}
-                {a.body.value && <div className="text-sm mt-1 whitespace-pre-wrap">{a.body.value}</div>}
+                {a.body.value && <div className="mt-1"><Markdown>{a.body.value}</Markdown></div>}
                 {a.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1">
                     {a.tags.map((t) => <span key={t} className="text-xs text-slate-500">#{t}</span>)}
@@ -364,11 +379,14 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                 </div>
 
                 {replyTo === a.id && (
-                  <div className="mt-2 flex gap-2">
-                    <input value={replyText} onChange={(e) => setReplyText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && replyText.trim()) submitReply(a.id); }}
-                      placeholder="Reply…" className="flex-1 border rounded px-2 py-1 text-sm" autoFocus />
-                    <button onClick={() => submitReply(a.id)} className="px-2 py-1 bg-slate-800 text-white rounded text-xs">Send</button>
+                  <div className="mt-2">
+                    <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={2}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && replyText.trim()) submitReply(a.id); }}
+                      placeholder="Reply… (markdown supported, Ctrl+Enter to send)" className="w-full border rounded px-2 py-1 text-sm mb-1" autoFocus />
+                    <div className="flex gap-2">
+                      <button onClick={() => submitReply(a.id)} className="px-2 py-1 bg-slate-800 text-white rounded text-xs">Send</button>
+                      <button onClick={() => { setReplyTo(null); setReplyText(''); }} className="px-2 py-1 text-xs text-slate-500">Cancel</button>
+                    </div>
                   </div>
                 )}
 
@@ -376,7 +394,8 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                   <ul className="mt-2 ml-3 border-l pl-3 space-y-2">
                     {replies.map((r) => (
                       <li key={r.id} className="text-sm">
-                        <span className="text-xs text-slate-400">{r.creator}: </span>{r.body.value}
+                        <span className="text-xs text-slate-400">{r.creator}</span>
+                        <div className="mt-0.5"><Markdown>{r.body.value}</Markdown></div>
                       </li>
                     ))}
                   </ul>

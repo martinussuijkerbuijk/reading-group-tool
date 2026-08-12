@@ -3,8 +3,8 @@ import { cors } from 'hono/cors';
 import { createBunWebSocket } from 'hono/bun';
 import db from './db.ts';
 import { pdfToHtml } from './ingest.ts';
-import { join, leave, broadcastAnnotation } from './realtime.ts';
-import type { Annotation, DocumentRecord, Group } from '@cr/shared';
+import { join, leave, broadcastAnnotation, broadcastCanvas } from './realtime.ts';
+import type { Annotation, DocumentRecord, Group, CanvasNode, CanvasEdge } from '@cr/shared';
 
 const { upgradeWebSocket, websocket } = createBunWebSocket();
 
@@ -166,6 +166,102 @@ app.delete('/api/annotations/:annId', (c) => {
   const row = db.query('SELECT document_id FROM annotations WHERE id = ?').get(c.req.param('annId')) as any;
   db.run('DELETE FROM annotations WHERE id = ?', [c.req.param('annId')]);
   if (row?.document_id) broadcastAnnotation(row.document_id, 'deleted', { id: c.req.param('annId') });
+  return c.json({ ok: true });
+});
+
+// ---- Canvas: nodes (annotation positions) ----
+
+function rowToCanvasNode(r: any): CanvasNode {
+  return {
+    id: r.id, documentId: r.document_id, annotationId: r.annotation_id,
+    x: r.x, y: r.y, width: r.width, height: r.height,
+    createdBy: r.created_by, createdAt: r.created_at,
+  };
+}
+
+function rowToCanvasEdge(r: any): CanvasEdge {
+  return {
+    id: r.id, documentId: r.document_id,
+    sourceAnnotationId: r.source_annotation_id,
+    targetAnnotationId: r.target_annotation_id,
+    label: r.label, createdBy: r.created_by, createdAt: r.created_at,
+  };
+}
+
+// Get all canvas nodes for a document
+app.get('/api/documents/:id/canvas/nodes', (c) => {
+  const rows = db.query('SELECT * FROM canvas_nodes WHERE document_id = ?').all(c.req.param('id')) as any[];
+  return c.json(rows.map(rowToCanvasNode));
+});
+
+// Create or update a node position (upsert by document_id + annotation_id)
+app.put('/api/documents/:id/canvas/nodes', async (c) => {
+  const documentId = c.req.param('id');
+  const body = await c.req.json();
+  const annotationId = String(body.annotationId ?? '');
+  if (!annotationId) return c.json({ error: 'annotationId required' }, 400);
+
+  const x = Number(body.x ?? 0);
+  const y = Number(body.y ?? 0);
+  const width = Number(body.width ?? 260);
+  const height = body.height != null ? Number(body.height) : null;
+
+  // Check if node already exists for this doc+annotation
+  const existing = db.query('SELECT id FROM canvas_nodes WHERE document_id = ? AND annotation_id = ?').get(documentId, annotationId) as any;
+
+  if (existing) {
+    db.run('UPDATE canvas_nodes SET x = ?, y = ?, width = ?, height = ? WHERE id = ?',
+      [x, y, width, height, existing.id]);
+    const row = db.query('SELECT * FROM canvas_nodes WHERE id = ?').get(existing.id) as any;
+    broadcastCanvas(documentId, 'node-updated', rowToCanvasNode(row));
+    return c.json(rowToCanvasNode(row));
+  } else {
+    const node: CanvasNode = {
+      id: newId(), documentId, annotationId, x, y, width, height: height,
+      createdBy: user(c), createdAt: now(),
+    };
+    db.run(
+      'INSERT INTO canvas_nodes (id, document_id, annotation_id, x, y, width, height, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [node.id, node.documentId, node.annotationId, node.x, node.y, node.width, node.height, node.createdBy, node.createdAt],
+    );
+    broadcastCanvas(documentId, 'node-created', node);
+    return c.json(node, 201);
+  }
+});
+
+// ---- Canvas: edges (connections between annotations) ----
+app.get('/api/documents/:id/canvas/edges', (c) => {
+  const rows = db.query('SELECT * FROM canvas_edges WHERE document_id = ?').all(c.req.param('id')) as any[];
+  return c.json(rows.map(rowToCanvasEdge));
+});
+
+app.post('/api/documents/:id/canvas/edges', async (c) => {
+  const documentId = c.req.param('id');
+  const body = await c.req.json();
+  const sourceAnnotationId = String(body.sourceAnnotationId ?? '');
+  const targetAnnotationId = String(body.targetAnnotationId ?? '');
+  if (!sourceAnnotationId || !targetAnnotationId) return c.json({ error: 'sourceAnnotationId and targetAnnotationId required' }, 400);
+
+  // Don't create duplicate edges
+  const existing = db.query('SELECT id FROM canvas_edges WHERE document_id = ? AND source_annotation_id = ? AND target_annotation_id = ?').get(documentId, sourceAnnotationId, targetAnnotationId) as any;
+  if (existing) return c.json({ id: existing.id, ok: true });
+
+  const edge: CanvasEdge = {
+    id: newId(), documentId, sourceAnnotationId, targetAnnotationId,
+    label: body.label ?? null, createdBy: user(c), createdAt: now(),
+  };
+  db.run(
+    'INSERT INTO canvas_edges (id, document_id, source_annotation_id, target_annotation_id, label, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [edge.id, edge.documentId, edge.sourceAnnotationId, edge.targetAnnotationId, edge.label, edge.createdBy, edge.createdAt],
+  );
+  broadcastCanvas(documentId, 'edge-created', edge);
+  return c.json(edge, 201);
+});
+
+app.delete('/api/canvas/edges/:edgeId', (c) => {
+  const row = db.query('SELECT document_id FROM canvas_edges WHERE id = ?').get(c.req.param('edgeId')) as any;
+  db.run('DELETE FROM canvas_edges WHERE id = ?', [c.req.param('edgeId')]);
+  if (row?.document_id) broadcastCanvas(row.document_id, 'edge-deleted', { id: c.req.param('edgeId') });
   return c.json({ ok: true });
 });
 

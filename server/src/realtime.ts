@@ -53,6 +53,10 @@ export function broadcastAnnotation(docId: string, event: 'created' | 'deleted',
   broadcast(docId, { type: 'annotation', event, annotation });
 }
 
+export function broadcastCanvas(docId: string, event: string, data: unknown) {
+  broadcast(docId, { type: 'canvas', event, data });
+}
+
 export function presenceCount(docId: string): number {
   return rooms.get(docId)?.size ?? 0;
 }
