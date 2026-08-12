@@ -136,7 +136,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
         parent.normalize();
       });
     };
-  }, [doc, anns, page, pageStart, pageEnd]);
+  }, [doc, anns, page, pageStart, pageEnd, viewMode]);
 
   // Apply active styling
   useEffect(() => {
