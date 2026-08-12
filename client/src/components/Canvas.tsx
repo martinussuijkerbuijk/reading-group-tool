@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ReactFlow, Background, Controls, MiniMap, useReactFlow,
+  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, useReactFlow,
   type Node, type Edge, type Connection, type NodeChange, type EdgeChange,
   applyNodeChanges, applyEdgeChanges, addEdge,
   Handle, Position, MarkerType,
@@ -59,9 +59,8 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(data.title || 'New thought');
   const [body, setBody] = useState(data.body || '');
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // Sync from server updates
   useEffect(() => {
     if (!editing) { setTitle(data.title || 'New thought'); setBody(data.body || ''); }
   }, [data.title, data.body, editing]);
@@ -121,7 +120,8 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
 
 const nodeTypes = { annotation: AnnotationNode, reasoning: ReasoningNode };
 
-export function Canvas({ docId, annotations, onBack }: {
+// ---- Inner component (has access to ReactFlow context) ----
+function CanvasContent({ docId, annotations, onBack }: {
   docId: string;
   annotations: Annotation[];
   onBack: () => void;
@@ -131,15 +131,20 @@ export function Canvas({ docId, annotations, onBack }: {
   const [loading, setLoading] = useState(true);
   const saveTimer = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const reactFlow = useReactFlow();
-
-  // Map annotationId -> canvasNodeId (for linking annotations to their canvas node)
   const annIdToNodeId = useRef<Map<string, string>>(new Map());
 
+  // Delete a reasoning node (defined FIRST so loadCanvas can reference it)
+  const handleDeleteNode = useCallback((nodeId: string) => {
+    setNodes((nds) => nds.filter(n => n.id !== nodeId));
+    setEdges((eds) => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
+    deleteCanvasNode(nodeId).catch(console.error);
+  }, []);
+
+  // Load saved canvas state
   const loadCanvas = useCallback(async () => {
     const [savedNodes, savedEdges] = await Promise.all([getCanvasNodes(docId), getCanvasEdges(docId)]);
     annIdToNodeId.current = new Map();
 
-    // Build annotation nodes from saved data or auto-layout
     const annNodeMap = new Map(savedNodes.filter(n => n.annotationId).map(n => [n.annotationId!, n]));
     const annNodes: Node[] = annotations
       .filter((a) => !a.parentId)
@@ -157,7 +162,6 @@ export function Canvas({ docId, annotations, onBack }: {
         };
       });
 
-    // Build reasoning nodes from saved data
     const reasonNodes: Node[] = savedNodes
       .filter(n => n.nodeType === 'reasoning')
       .map(n => ({
@@ -176,11 +180,11 @@ export function Canvas({ docId, annotations, onBack }: {
     }));
     setEdges(newEdges);
     setLoading(false);
-  }, [docId, annotations]);
+  }, [docId, annotations, handleDeleteNode]);
 
   useEffect(() => { loadCanvas(); }, [loadCanvas]);
 
-  // Sync when annotations change (new annotations from realtime)
+  // Sync when annotations change
   useEffect(() => {
     setNodes((prev) => {
       const existingAnnIds = new Set(prev.filter(n => n.type === 'annotation').map(n => (n.data as any).annotation?.id));
@@ -203,14 +207,12 @@ export function Canvas({ docId, annotations, onBack }: {
     });
   }, [annotations]);
 
-  // Save annotation node position (creates canvas_node if it doesn't exist yet)
   const saveAnnotationNodePosition = useCallback((nodeId: string, annId: string, x: number, y: number) => {
     const timer = saveTimer.current.get(nodeId);
     if (timer) clearTimeout(timer);
     saveTimer.current.set(nodeId, setTimeout(async () => {
       try {
         const saved = await upsertCanvasNode(docId, annId, x, y);
-        // If the node had a pending- ID, replace it with the real canvas node ID
         if (nodeId.startsWith('pending-')) {
           annIdToNodeId.current.set(annId, saved.id);
           setNodes((nds) => nds.map(n => n.id === nodeId ? { ...n, id: saved.id } : n));
@@ -220,7 +222,6 @@ export function Canvas({ docId, annotations, onBack }: {
     }, 400));
   }, [docId]);
 
-  // Save reasoning node position
   const saveReasoningNodePosition = useCallback((nodeId: string, x: number, y: number) => {
     const timer = saveTimer.current.get(nodeId);
     if (timer) clearTimeout(timer);
@@ -260,9 +261,7 @@ export function Canvas({ docId, annotations, onBack }: {
 
   const onConnect = useCallback((conn: Connection) => {
     if (!conn.source || !conn.target || conn.source === conn.target) return;
-    // Don't connect pending nodes (not yet saved)
     if (conn.source.startsWith('pending-') || conn.target.startsWith('pending-')) {
-      // Save them first by moving them slightly to trigger save
       setNodes(nds => nds.map(n => {
         if (n.id === conn.source || n.id === conn.target) {
           if (n.type === 'annotation') {
@@ -283,7 +282,6 @@ export function Canvas({ docId, annotations, onBack }: {
     createCanvasEdge(docId, conn.source, conn.target).catch(console.error);
   }, [docId]);
 
-  // Add a new reasoning node at the center of the viewport
   const handleAddReasoning = useCallback(async () => {
     const center = reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
     const node = await createReasoningNode(docId, 'New thought', '', center.x - 140, center.y - 50);
@@ -291,14 +289,7 @@ export function Canvas({ docId, annotations, onBack }: {
       id: node.id, type: 'reasoning', position: { x: node.x, y: node.y }, width: node.width,
       data: { title: node.title, body: node.body, createdBy: node.createdBy, onDelete: handleDeleteNode },
     }]);
-  }, [docId, reactFlow]);
-
-  // Delete a reasoning node
-  const handleDeleteNode = useCallback((nodeId: string) => {
-    setNodes((nds) => nds.filter(n => n.id !== nodeId));
-    setEdges((eds) => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
-    deleteCanvasNode(nodeId).catch(console.error);
-  }, []);
+  }, [docId, reactFlow, handleDeleteNode]);
 
   if (loading) return <div className="p-6 text-slate-500">Loading canvas…</div>;
 
@@ -342,5 +333,14 @@ export function Canvas({ docId, annotations, onBack }: {
         </ReactFlow>
       </div>
     </div>
+  );
+}
+
+// ---- Outer component — wraps in ReactFlowProvider so useReactFlow() works ----
+export function Canvas(props: { docId: string; annotations: Annotation[]; onBack: () => void }) {
+  return (
+    <ReactFlowProvider>
+      <CanvasContent {...props} />
+    </ReactFlowProvider>
   );
 }
