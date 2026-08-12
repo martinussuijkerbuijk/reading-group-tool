@@ -58,7 +58,7 @@ export interface Group {
   createdAt: string;
 }
 
-export type CanvasNodeType = 'annotation' | 'reasoning';
+export type CanvasNodeType = 'annotation' | 'reasoning' | 'image';
 
 export interface CanvasNode {
   id: string;
@@ -67,6 +67,7 @@ export interface CanvasNode {
   nodeType: CanvasNodeType;
   title: string | null;
   body: string | null;
+  imageUrl: string | null;
   x: number;
   y: number;
   width: number;

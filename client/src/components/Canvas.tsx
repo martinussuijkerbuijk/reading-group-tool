@@ -9,7 +9,7 @@ import '@xyflow/react/dist/style.css';
 import type { Annotation, CanvasNode, CanvasEdge } from '@cr/shared';
 import {
   getCanvasNodes, getCanvasEdges, upsertCanvasNode, updateCanvasNode, deleteCanvasNode,
-  createReasoningNode, createCanvasEdge, deleteCanvasEdge,
+  createReasoningNode, createImageNode, createCanvasEdge, deleteCanvasEdge,
 } from '../api.ts';
 import { Markdown } from './Markdown.tsx';
 
@@ -132,7 +132,65 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
   );
 }
 
-const nodeTypes = { annotation: AnnotationNode, reasoning: ReasoningNode };
+// ---- Image node (pasted/uploaded images) ----
+function ImageNode({ data, id }: { data: any; id: string }) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(data.title || '');
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latest = useRef(title);
+  latest.current = title;
+
+  useEffect(() => {
+    if (!editing) setTitle(data.title || '');
+  }, [data.title, editing]);
+
+  const save = useCallback(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      updateCanvasNode(id, { title: latest.current }).then(() => data.onUpdate?.(id, latest.current, null)).catch(console.error);
+    }, 500);
+  }, [id, data]);
+
+  const flushSave = useCallback(() => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = undefined; }
+    updateCanvasNode(id, { title: latest.current }).then(() => data.onUpdate?.(id, latest.current, null)).catch(console.error);
+  }, [id, data]);
+
+  return (
+    <div className="cr-canvas-node bg-slate-50 border-slate-300 border rounded-lg shadow-sm p-2" style={{ minWidth: 180, maxWidth: 360 }}>
+      <Handle type="target" position={Position.Top} className="!bg-slate-400 !w-2.5 !h-2.5" />
+      <Handle type="source" position={Position.Bottom} className="!bg-slate-400 !w-2.5 !h-2.5" />
+      {editing ? (
+        <>
+          <input
+            value={title} onChange={(e) => { setTitle(e.target.value); save(); }}
+            className="w-full font-medium text-sm border-b border-slate-200 bg-transparent outline-none mb-2 pb-1"
+            placeholder="Caption…"
+            autoFocus
+          />
+          <button onClick={() => { flushSave(); setEditing(false); }}
+            className="text-xs px-2 py-1 bg-slate-600 text-white rounded">Done</button>
+        </>
+      ) : (
+        <>
+          <img src={data.imageUrl} alt={title || 'image'} className="rounded max-w-full" style={{ maxHeight: 300 }} />
+          {title ? (
+            <div className="text-xs text-slate-600 mt-1.5 font-medium" onDoubleClick={() => setEditing(true)}>{title}</div>
+          ) : (
+            <div className="text-xs text-slate-400 italic mt-1.5" onDoubleClick={() => setEditing(true)}>Double-click to add caption</div>
+          )}
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-xs text-slate-400">by {data.createdBy}</span>
+            <button onClick={() => { if (confirm('Delete this image?')) data.onDelete?.(id); }}
+              className="text-xs text-red-500 hover:underline">delete</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const nodeTypes = { annotation: AnnotationNode, reasoning: ReasoningNode, image: ImageNode };
 
 // ---- Inner component (has access to ReactFlow context) ----
 function CanvasContent({ docId, annotations, onBack }: {
@@ -155,8 +213,8 @@ function CanvasContent({ docId, annotations, onBack }: {
   }, []);
 
   // Update a reasoning node's data in the local React Flow state (after save)
-  const handleUpdateNodeData = useCallback((nodeId: string, title: string, body: string) => {
-    setNodes((nds) => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, title, body } } : n));
+  const handleUpdateNodeData = useCallback((nodeId: string, title: string, body: string | null) => {
+    setNodes((nds) => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...(title !== null && { title }), ...(body !== null && { body }) } } : n));
   }, []);
 
   // Load saved canvas state
@@ -189,7 +247,15 @@ function CanvasContent({ docId, annotations, onBack }: {
         data: { title: n.title, body: n.body, createdBy: n.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
       }));
 
-    setNodes([...annNodes, ...reasonNodes]);
+    const imageNodes: Node[] = savedNodes
+      .filter(n => n.nodeType === 'image')
+      .map(n => ({
+        id: n.id, type: 'image',
+        position: { x: n.x, y: n.y }, width: n.width,
+        data: { imageUrl: n.imageUrl, title: n.title, createdBy: n.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
+      }));
+
+    setNodes([...annNodes, ...reasonNodes, ...imageNodes]);
 
     const newEdges: Edge[] = savedEdges.map((e) => ({
       id: e.id, source: e.sourceNodeId, target: e.targetNodeId,
@@ -199,7 +265,7 @@ function CanvasContent({ docId, annotations, onBack }: {
     }));
     setEdges(newEdges);
     setLoading(false);
-  }, [docId, annotations, handleDeleteNode]);
+  }, [docId, annotations, handleDeleteNode, handleUpdateNodeData]);
 
   useEffect(() => { loadCanvas(); }, [loadCanvas]);
 
@@ -255,7 +321,7 @@ function CanvasContent({ docId, annotations, onBack }: {
       if (change.type === 'position' && change.dragging === false) {
         const node = nodes.find(n => n.id === change.id);
         if (!node) continue;
-        if (node.type === 'reasoning') {
+        if (node.type === 'reasoning' || node.type === 'image') {
           saveReasoningNodePosition(change.id, change.position.x, change.position.y);
         } else if (node.type === 'annotation') {
           const annId = (node.data as any)?.annotation?.id;
@@ -264,7 +330,7 @@ function CanvasContent({ docId, annotations, onBack }: {
       }
       if (change.type === 'remove') {
         const node = nodes.find(n => n.id === change.id);
-        if (node?.type === 'reasoning') deleteCanvasNode(change.id).catch(console.error);
+        if (node?.type === 'reasoning' || node?.type === 'image') deleteCanvasNode(change.id).catch(console.error);
       }
     }
   }, [nodes, saveAnnotationNodePosition, saveReasoningNodePosition]);
@@ -308,7 +374,34 @@ function CanvasContent({ docId, annotations, onBack }: {
       id: node.id, type: 'reasoning', position: { x: node.x, y: node.y }, width: node.width,
       data: { title: node.title, body: node.body, createdBy: node.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
     }]);
-  }, [docId, reactFlow, handleDeleteNode]);
+  }, [docId, reactFlow, handleDeleteNode, handleUpdateNodeData]);
+
+  // Paste handler — detects image in clipboard and creates an image node
+  const handlePaste = useCallback(async (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        e.preventDefault();
+        const center = reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+        try {
+          const node = await createImageNode(docId, file, center.x - 160, center.y - 100);
+          setNodes((nds) => [...nds, {
+            id: node.id, type: 'image', position: { x: node.x, y: node.y }, width: node.width,
+            data: { imageUrl: node.imageUrl, title: node.title, createdBy: node.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
+          }]);
+        } catch (err) { console.error('Failed to upload pasted image:', err); }
+        return;
+      }
+    }
+  }, [docId, reactFlow, handleDeleteNode, handleUpdateNodeData]);
+
+  useEffect(() => {
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [handlePaste]);
 
   if (loading) return <div className="p-6 text-slate-500">Loading canvas…</div>;
 
@@ -321,7 +414,7 @@ function CanvasContent({ docId, annotations, onBack }: {
           className="px-3 py-1.5 bg-rose-500 text-white rounded text-sm hover:bg-rose-600 flex items-center gap-1">
           + Reasoning node
         </button>
-        <span className="text-xs text-slate-400 ml-auto">Drag nodes · Drag from bottom dot to connect · Double-click reasoning nodes to edit · Select edge + Delete to remove</span>
+        <span className="text-xs text-slate-400 ml-auto">Drag nodes · Drag from bottom dot to connect · Double-click to edit · Paste images with Ctrl+V · Select edge + Delete to remove</span>
       </div>
       <div className="flex-1">
         <ReactFlow
@@ -343,6 +436,7 @@ function CanvasContent({ docId, annotations, onBack }: {
           <MiniMap
             nodeColor={(n) => {
               if (n.type === 'reasoning') return '#fecaca';
+              if (n.type === 'image') return '#cbd5e1';
               const ann = n.data?.annotation as Annotation;
               const t = ann?.body?.type;
               return t === 'question' ? '#bfdbfe' : t === 'highlight' ? '#a7f3d0' : t === 'note' ? '#ddd6fe' : '#fde68a';

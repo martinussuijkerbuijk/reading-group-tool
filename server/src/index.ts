@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { createBunWebSocket } from 'hono/bun';
+import { serveStatic } from 'hono/bun';
 import db from './db.ts';
 import { pdfToHtml } from './ingest.ts';
 import { join, leave, broadcastAnnotation, broadcastCanvas } from './realtime.ts';
@@ -10,6 +11,9 @@ const { upgradeWebSocket, websocket } = createBunWebSocket();
 
 const app = new Hono();
 app.use('*', cors());
+
+// Serve uploaded images statically
+app.use('/uploads/*', serveStatic({ root: './' }));
 
 // Phase 0 identity: a single user via header, default "you". Real auth comes later.
 function user(c) {
@@ -175,7 +179,7 @@ function rowToCanvasNode(r: any): CanvasNode {
   return {
     id: r.id, documentId: r.document_id, annotationId: r.annotation_id,
     nodeType: r.node_type ?? 'annotation',
-    title: r.title, body: r.body,
+    title: r.title, body: r.body, imageUrl: r.image_url,
     x: r.x, y: r.y, width: r.width, height: r.height,
     createdBy: r.created_by, createdAt: r.created_at,
   };
@@ -251,7 +255,47 @@ app.post('/api/documents/:id/canvas/reasoning-nodes', async (c) => {
   return c.json(node, 201);
 });
 
-// Update a reasoning node's content (title/body) or position
+// Create an image node (accepts FormData with image file + position)
+app.post('/api/documents/:id/canvas/image-nodes', async (c) => {
+  const documentId = c.req.param('id');
+  const form = await c.req.formData();
+  const file = form.get('image') as File | null;
+  const title = String(form.get('title') ?? '');
+  const x = Number(form.get('x') ?? 0);
+  const y = Number(form.get('y') ?? 0);
+  if (!file) return c.json({ error: 'image file required' }, 400);
+
+  // Validate file type
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+  if (!allowedTypes.includes(file.type)) {
+    return c.json({ error: 'unsupported file type: ' + file.type }, 400);
+  }
+
+  // Save the file to uploads/
+  const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
+  const filename = `${newId()}.${ext}`;
+  const uploadDir = 'uploads';
+  try { await Bun.write(`${uploadDir}/${filename}`, file); } catch {
+    // Create uploads dir if it doesn't exist
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(uploadDir, { recursive: true });
+    await Bun.write(`${uploadDir}/${filename}`, file);
+  }
+  const imageUrl = `/uploads/${filename}`;
+
+  const node: CanvasNode = {
+    id: newId(), documentId, annotationId: null, nodeType: 'image',
+    title: title || null, body: null, imageUrl,
+    x, y, width: Number(form.get('width') ?? 320), height: null,
+    createdBy: user(c), createdAt: now(),
+  };
+  db.run(
+    'INSERT INTO canvas_nodes (id, document_id, annotation_id, node_type, title, body, image_url, x, y, width, height, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [node.id, node.documentId, node.annotationId, node.nodeType, node.title, node.body, node.imageUrl, node.x, node.y, node.width, node.height, node.createdBy, node.createdAt],
+  );
+  broadcastCanvas(documentId, 'node-created', node);
+  return c.json(node, 201);
+});
 app.put('/api/canvas/nodes/:nodeId', async (c) => {
   const nodeId = c.req.param('nodeId');
   const body = await c.req.json();

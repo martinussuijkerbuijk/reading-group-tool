@@ -68,6 +68,19 @@ export async function createReasoningNode(docId: string, title: string, body: st
   });
   return r.json();
 }
+export async function createImageNode(docId: string, image: Blob, x: number, y: number, title?: string): Promise<CanvasNode> {
+  const form = new FormData();
+  form.append('image', image);
+  form.append('x', String(x));
+  form.append('y', String(y));
+  if (title) form.append('title', title);
+  const r = await fetch(`/api/documents/${docId}/canvas/image-nodes`, {
+    method: 'POST', headers: { 'x-user': USER },
+    body: form,
+  });
+  if (!r.ok) throw new Error('Failed to upload image');
+  return r.json();
+}
 export async function updateCanvasNode(nodeId: string, updates: Partial<{ title: string; body: string; x: number; y: number; width: number }>): Promise<CanvasNode> {
   const r = await fetch(`/api/canvas/nodes/${nodeId}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-user': USER },

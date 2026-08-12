@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS canvas_nodes (
   node_type TEXT NOT NULL DEFAULT 'annotation',
   title TEXT,
   body TEXT,
+  image_url TEXT,
   x REAL NOT NULL DEFAULT 0,
   y REAL NOT NULL DEFAULT 0,
   width REAL NOT NULL DEFAULT 260,
@@ -77,6 +78,7 @@ try { db.exec('ALTER TABLE annotations ADD COLUMN selector_end INTEGER'); } catc
 try { db.exec("ALTER TABLE canvas_nodes ADD COLUMN node_type TEXT NOT NULL DEFAULT 'annotation'"); } catch {}
 try { db.exec('ALTER TABLE canvas_nodes ADD COLUMN title TEXT'); } catch {}
 try { db.exec('ALTER TABLE canvas_nodes ADD COLUMN body TEXT'); } catch {}
+try { db.exec('ALTER TABLE canvas_nodes ADD COLUMN image_url TEXT'); } catch {}
 // Migrate canvas_edges: add source_node_id / target_node_id if they don't exist
 try { db.exec('ALTER TABLE canvas_edges ADD COLUMN source_node_id TEXT'); } catch {}
 try { db.exec('ALTER TABLE canvas_edges ADD COLUMN target_node_id TEXT'); } catch {}
