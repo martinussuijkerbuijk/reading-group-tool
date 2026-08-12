@@ -61,14 +61,31 @@ export async function upsertCanvasNode(docId: string, annotationId: string, x: n
   });
   return r.json();
 }
+export async function createReasoningNode(docId: string, title: string, body: string, x: number, y: number): Promise<CanvasNode> {
+  const r = await fetch(`/api/documents/${docId}/canvas/reasoning-nodes`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user': USER },
+    body: JSON.stringify({ title, body, x, y, width: 280 }),
+  });
+  return r.json();
+}
+export async function updateCanvasNode(nodeId: string, updates: Partial<{ title: string; body: string; x: number; y: number; width: number }>): Promise<CanvasNode> {
+  const r = await fetch(`/api/canvas/nodes/${nodeId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-user': USER },
+    body: JSON.stringify(updates),
+  });
+  return r.json();
+}
+export async function deleteCanvasNode(nodeId: string): Promise<void> {
+  await fetch(`/api/canvas/nodes/${nodeId}`, { method: 'DELETE', headers: { 'x-user': USER } });
+}
 export async function getCanvasEdges(docId: string): Promise<CanvasEdge[]> {
   const r = await fetch(`/api/documents/${docId}/canvas/edges`);
   return r.json();
 }
-export async function createCanvasEdge(docId: string, sourceAnnotationId: string, targetAnnotationId: string, label?: string): Promise<CanvasEdge> {
+export async function createCanvasEdge(docId: string, sourceNodeId: string, targetNodeId: string, label?: string): Promise<CanvasEdge> {
   const r = await fetch(`/api/documents/${docId}/canvas/edges`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user': USER },
-    body: JSON.stringify({ sourceAnnotationId, targetAnnotationId, label }),
+    body: JSON.stringify({ sourceNodeId, targetNodeId, label }),
   });
   return r.json();
 }

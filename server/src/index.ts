@@ -169,11 +169,13 @@ app.delete('/api/annotations/:annId', (c) => {
   return c.json({ ok: true });
 });
 
-// ---- Canvas: nodes (annotation positions) ----
+// ---- Canvas: nodes (annotation positions + reasoning nodes) ----
 
 function rowToCanvasNode(r: any): CanvasNode {
   return {
     id: r.id, documentId: r.document_id, annotationId: r.annotation_id,
+    nodeType: r.node_type ?? 'annotation',
+    title: r.title, body: r.body,
     x: r.x, y: r.y, width: r.width, height: r.height,
     createdBy: r.created_by, createdAt: r.created_at,
   };
@@ -182,8 +184,8 @@ function rowToCanvasNode(r: any): CanvasNode {
 function rowToCanvasEdge(r: any): CanvasEdge {
   return {
     id: r.id, documentId: r.document_id,
-    sourceAnnotationId: r.source_annotation_id,
-    targetAnnotationId: r.target_annotation_id,
+    sourceNodeId: r.source_node_id,
+    targetNodeId: r.target_node_id,
     label: r.label, createdBy: r.created_by, createdAt: r.created_at,
   };
 }
@@ -194,7 +196,7 @@ app.get('/api/documents/:id/canvas/nodes', (c) => {
   return c.json(rows.map(rowToCanvasNode));
 });
 
-// Create or update a node position (upsert by document_id + annotation_id)
+// Create or update an annotation node position (upsert by document_id + annotation_id)
 app.put('/api/documents/:id/canvas/nodes', async (c) => {
   const documentId = c.req.param('id');
   const body = await c.req.json();
@@ -206,7 +208,6 @@ app.put('/api/documents/:id/canvas/nodes', async (c) => {
   const width = Number(body.width ?? 260);
   const height = body.height != null ? Number(body.height) : null;
 
-  // Check if node already exists for this doc+annotation
   const existing = db.query('SELECT id FROM canvas_nodes WHERE document_id = ? AND annotation_id = ?').get(documentId, annotationId) as any;
 
   if (existing) {
@@ -217,42 +218,98 @@ app.put('/api/documents/:id/canvas/nodes', async (c) => {
     return c.json(rowToCanvasNode(row));
   } else {
     const node: CanvasNode = {
-      id: newId(), documentId, annotationId, x, y, width, height: height,
-      createdBy: user(c), createdAt: now(),
+      id: newId(), documentId, annotationId, nodeType: 'annotation',
+      title: null, body: null,
+      x, y, width, height, createdBy: user(c), createdAt: now(),
     };
     db.run(
-      'INSERT INTO canvas_nodes (id, document_id, annotation_id, x, y, width, height, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [node.id, node.documentId, node.annotationId, node.x, node.y, node.width, node.height, node.createdBy, node.createdAt],
+      'INSERT INTO canvas_nodes (id, document_id, annotation_id, node_type, title, body, x, y, width, height, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [node.id, node.documentId, node.annotationId, node.nodeType, node.title, node.body, node.x, node.y, node.width, node.height, node.createdBy, node.createdAt],
     );
     broadcastCanvas(documentId, 'node-created', node);
     return c.json(node, 201);
   }
 });
 
-// ---- Canvas: edges (connections between annotations) ----
+// Create a reasoning node (standalone, not tied to an annotation)
+app.post('/api/documents/:id/canvas/reasoning-nodes', async (c) => {
+  const documentId = c.req.param('id');
+  const body = await c.req.json();
+  const node: CanvasNode = {
+    id: newId(), documentId, annotationId: null, nodeType: 'reasoning',
+    title: body.title ?? 'New thought',
+    body: body.body ?? '',
+    x: Number(body.x ?? 0), y: Number(body.y ?? 0),
+    width: Number(body.width ?? 280), height: body.height != null ? Number(body.height) : null,
+    createdBy: user(c), createdAt: now(),
+  };
+  db.run(
+    'INSERT INTO canvas_nodes (id, document_id, annotation_id, node_type, title, body, x, y, width, height, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [node.id, node.documentId, node.annotationId, node.nodeType, node.title, node.body, node.x, node.y, node.width, node.height, node.createdBy, node.createdAt],
+  );
+  broadcastCanvas(documentId, 'node-created', node);
+  return c.json(node, 201);
+});
+
+// Update a reasoning node's content (title/body) or position
+app.put('/api/canvas/nodes/:nodeId', async (c) => {
+  const nodeId = c.req.param('nodeId');
+  const body = await c.req.json();
+  const updates: string[] = [];
+  const params: any[] = [];
+  if (body.title !== undefined) { updates.push('title = ?'); params.push(body.title); }
+  if (body.body !== undefined) { updates.push('body = ?'); params.push(body.body); }
+  if (body.x !== undefined) { updates.push('x = ?'); params.push(Number(body.x)); }
+  if (body.y !== undefined) { updates.push('y = ?'); params.push(Number(body.y)); }
+  if (body.width !== undefined) { updates.push('width = ?'); params.push(Number(body.width)); }
+  if (updates.length === 0) return c.json({ error: 'no fields to update' }, 400);
+  params.push(nodeId);
+  db.run(`UPDATE canvas_nodes SET ${updates.join(', ')} WHERE id = ?`, params);
+  const row = db.query('SELECT * FROM canvas_nodes WHERE id = ?').get(nodeId) as any;
+  if (!row) return c.json({ error: 'not found' }, 404);
+  const documentId = row.document_id;
+  broadcastCanvas(documentId, 'node-updated', rowToCanvasNode(row));
+  return c.json(rowToCanvasNode(row));
+});
+
+// Delete a canvas node (and its edges explicitly — FK cascade may not work on migrated columns)
+app.delete('/api/canvas/nodes/:nodeId', (c) => {
+  const nodeId = c.req.param('nodeId');
+  const row = db.query('SELECT document_id FROM canvas_nodes WHERE id = ?').get(nodeId) as any;
+  if (!row) return c.json({ error: 'not found' }, 404);
+  // Explicitly delete edges referencing this node
+  const edgeRows = db.query('SELECT id FROM canvas_edges WHERE source_node_id = ? OR target_node_id = ?').all(nodeId, nodeId) as any[];
+  db.run('DELETE FROM canvas_edges WHERE source_node_id = ? OR target_node_id = ?', [nodeId, nodeId]);
+  db.run('DELETE FROM canvas_nodes WHERE id = ?', [nodeId]);
+  // Broadcast edge deletions first, then node deletion
+  for (const e of edgeRows) broadcastCanvas(row.document_id, 'edge-deleted', { id: e.id });
+  broadcastCanvas(row.document_id, 'node-deleted', { id: nodeId });
+  return c.json({ ok: true });
+});
+
+// ---- Canvas: edges (connections between nodes) ----
 app.get('/api/documents/:id/canvas/edges', (c) => {
-  const rows = db.query('SELECT * FROM canvas_edges WHERE document_id = ?').all(c.req.param('id')) as any[];
+  const rows = db.query('SELECT * FROM canvas_edges WHERE document_id = ? AND source_node_id IS NOT NULL AND target_node_id IS NOT NULL').all(c.req.param('id')) as any[];
   return c.json(rows.map(rowToCanvasEdge));
 });
 
 app.post('/api/documents/:id/canvas/edges', async (c) => {
   const documentId = c.req.param('id');
   const body = await c.req.json();
-  const sourceAnnotationId = String(body.sourceAnnotationId ?? '');
-  const targetAnnotationId = String(body.targetAnnotationId ?? '');
-  if (!sourceAnnotationId || !targetAnnotationId) return c.json({ error: 'sourceAnnotationId and targetAnnotationId required' }, 400);
+  const sourceNodeId = String(body.sourceNodeId ?? '');
+  const targetNodeId = String(body.targetNodeId ?? '');
+  if (!sourceNodeId || !targetNodeId) return c.json({ error: 'sourceNodeId and targetNodeId required' }, 400);
 
-  // Don't create duplicate edges
-  const existing = db.query('SELECT id FROM canvas_edges WHERE document_id = ? AND source_annotation_id = ? AND target_annotation_id = ?').get(documentId, sourceAnnotationId, targetAnnotationId) as any;
+  const existing = db.query('SELECT id FROM canvas_edges WHERE document_id = ? AND source_node_id = ? AND target_node_id = ?').get(documentId, sourceNodeId, targetNodeId) as any;
   if (existing) return c.json({ id: existing.id, ok: true });
 
   const edge: CanvasEdge = {
-    id: newId(), documentId, sourceAnnotationId, targetAnnotationId,
+    id: newId(), documentId, sourceNodeId, targetNodeId,
     label: body.label ?? null, createdBy: user(c), createdAt: now(),
   };
   db.run(
-    'INSERT INTO canvas_edges (id, document_id, source_annotation_id, target_annotation_id, label, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [edge.id, edge.documentId, edge.sourceAnnotationId, edge.targetAnnotationId, edge.label, edge.createdBy, edge.createdAt],
+    'INSERT INTO canvas_edges (id, document_id, source_node_id, target_node_id, label, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [edge.id, edge.documentId, edge.sourceNodeId, edge.targetNodeId, edge.label, edge.createdBy, edge.createdAt],
   );
   broadcastCanvas(documentId, 'edge-created', edge);
   return c.json(edge, 201);

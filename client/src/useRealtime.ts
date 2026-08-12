@@ -8,13 +8,14 @@ type RealtimeEvent =
   | { type: 'peer-joined'; user: string }
   | { type: 'peer-left'; user: string }
   | { type: 'annotation'; event: 'created' | 'deleted'; annotation: Annotation | { id: string } }
-  | { type: 'canvas'; event: 'node-created' | 'node-updated' | 'edge-created' | 'edge-deleted'; data: CanvasNode | CanvasEdge | { id: string } };
+  | { type: 'canvas'; event: 'node-created' | 'node-updated' | 'node-deleted' | 'edge-created' | 'edge-deleted'; data: CanvasNode | CanvasEdge | { id: string } };
 
 export function useRealtime(docId: string, opts: {
   onAnnotationCreated: (ann: Annotation) => void;
   onAnnotationDeleted: (id: string) => void;
   onCanvasNodeCreated?: (node: CanvasNode) => void;
   onCanvasNodeUpdated?: (node: CanvasNode) => void;
+  onCanvasNodeDeleted?: (id: string) => void;
   onCanvasEdgeCreated?: (edge: CanvasEdge) => void;
   onCanvasEdgeDeleted?: (id: string) => void;
 }) {
@@ -51,9 +52,10 @@ export function useRealtime(docId: string, opts: {
           }
           break;
         case 'canvas':
-          if (msg.event === 'node-created' && 'annotationId' in msg.data) optsRef.current.onCanvasNodeCreated?.(msg.data as CanvasNode);
-          else if (msg.event === 'node-updated' && 'annotationId' in msg.data) optsRef.current.onCanvasNodeUpdated?.(msg.data as CanvasNode);
-          else if (msg.event === 'edge-created' && 'sourceAnnotationId' in msg.data) optsRef.current.onCanvasEdgeCreated?.(msg.data as CanvasEdge);
+          if (msg.event === 'node-created' && 'documentId' in msg.data) optsRef.current.onCanvasNodeCreated?.(msg.data as CanvasNode);
+          else if (msg.event === 'node-updated' && 'documentId' in msg.data) optsRef.current.onCanvasNodeUpdated?.(msg.data as CanvasNode);
+          else if (msg.event === 'node-deleted' && 'id' in msg.data) optsRef.current.onCanvasNodeDeleted?.((msg.data as { id: string }).id);
+          else if (msg.event === 'edge-created' && 'sourceNodeId' in msg.data) optsRef.current.onCanvasEdgeCreated?.(msg.data as CanvasEdge);
           else if (msg.event === 'edge-deleted' && 'id' in msg.data) optsRef.current.onCanvasEdgeDeleted?.((msg.data as { id: string }).id);
           break;
       }
