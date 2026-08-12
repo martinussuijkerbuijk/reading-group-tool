@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Annotation, AnnotationBodyType, DocumentRecord } from '@cr/shared';
 import { createAnnotation, deleteAnnotation, getDocument, listAnnotations, selectionToSelector } from '../api.ts';
 import { useRealtime } from '../useRealtime.ts';
 import { Markdown } from './Markdown.tsx';
 import { Canvas } from './Canvas.tsx';
+import { splitIntoPages, findPageForOffset, type Page } from '../pagination.ts';
 
 export function Reader({ docId, onBack }: { docId: string; onBack: () => void }) {
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
@@ -19,26 +20,32 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [replyText, setReplyText] = useState('');
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // Pagination state
+  const [pages, setPages] = useState<Page[]>([]);
+  const [currentPage, setCurrentPage] = useState(0);
+
   async function load() {
     const [d, a] = await Promise.all([getDocument(docId), listAnnotations(docId)]);
     setDoc(d); setAnns(a);
+    setPages(splitIntoPages(d.html));
+    setCurrentPage(0);
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [docId]);
 
-  // Realtime: live annotation sync + presence
   const { presentUsers, me } = useRealtime(docId, {
     onAnnotationCreated: (ann) => setAnns((a) => a.some((x) => x.id === ann.id) ? a : [...a, ann]),
     onAnnotationDeleted: (id) => setAnns((a) => a.filter((x) => x.id !== id && x.parentId !== id)),
   });
 
-  // ---- Highlight rendering: position-based anchoring (primary) with TextQuoteSelector fallback ----
-  // Uses TextPositionSelector (start/end char offsets) for precise anchoring.
-  // Falls back to TextQuoteSelector string matching only if no position selector exists.
+  const page = pages[currentPage];
+  const pageStart = page?.startOffset ?? 0;
+  const pageEnd = page?.endOffset ?? 0;
+
+  // ---- Highlight rendering: page-local offsets ----
   useEffect(() => {
-    if (!doc || !contentRef.current || anns.length === 0) return;
+    if (!doc || !contentRef.current || anns.length === 0 || !page) return;
     const container = contentRef.current;
 
-    // Build a flat list of text nodes with their character offsets.
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const textNodes: { node: Text; start: number }[] = [];
     let cumOffset = 0;
@@ -48,7 +55,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
       textNodes.push({ node: tn, start: cumOffset });
       cumOffset += tn.nodeValue?.length ?? 0;
     }
-    const fullText = container.textContent ?? '';
+    const pageText = container.textContent ?? '';
 
     const TYPE_COLORS: Record<string, string> = {
       comment: 'bg-amber-200/60',
@@ -57,7 +64,6 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
       note: 'bg-purple-200/60',
     };
 
-    // Resolve each annotation to a (start, end) character range.
     const matches: { start: number; end: number; annId: string; type: string }[] = [];
     for (const ann of anns) {
       if (ann.parentId) continue;
@@ -65,41 +71,23 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
       const quoteSel = ann.target.selector.find((s: any) => s.type === 'TextQuoteSelector') as any;
       if (!quoteSel?.exact) continue;
 
-      let start: number, end: number;
+      let localStart: number, localEnd: number;
 
       if (posSel && typeof posSel.start === 'number') {
-        // Position-based: use the stored offset directly.
-        start = posSel.start;
-        end = posSel.end;
+        // Position-based: check if this annotation falls on the current page
+        const globalStart = posSel.start;
+        const globalEnd = posSel.end;
+        if (globalStart < pageStart || globalStart >= pageEnd) continue;
+        localStart = globalStart - pageStart;
+        localEnd = globalEnd - pageStart;
       } else {
-        // Fallback: find best match by TextQuoteSelector.
-        const positions: number[] = [];
-        let from = 0;
-        while (true) {
-          const idx = fullText.indexOf(quoteSel.exact, from);
-          if (idx === -1) break;
-          positions.push(idx);
-          from = idx + 1;
-        }
-        if (positions.length === 0) continue;
-        let best = positions[0];
-        let bestScore = -1;
-        for (const pos of positions) {
-          let score = 0;
-          if (quoteSel.prefix) {
-            const ctx = fullText.slice(Math.max(0, pos - quoteSel.prefix.length), pos);
-            if (ctx.endsWith(quoteSel.prefix)) score += 2;
-          }
-          if (quoteSel.suffix) {
-            const ctx = fullText.slice(pos + quoteSel.exact.length, pos + quoteSel.exact.length + quoteSel.suffix.length);
-            if (ctx.startsWith(quoteSel.suffix)) score += 2;
-          }
-          if (score > bestScore) { bestScore = score; best = pos; }
-        }
-        start = best;
-        end = best + quoteSel.exact.length;
+        // Fallback: try to find the quote in the current page text
+        const idx = pageText.indexOf(quoteSel.exact);
+        if (idx === -1) continue;
+        localStart = idx;
+        localEnd = idx + quoteSel.exact.length;
       }
-      matches.push({ start, end, annId: ann.id, type: ann.body.type });
+      matches.push({ start: localStart, end: localEnd, annId: ann.id, type: ann.body.type });
     }
 
     if (matches.length === 0) return;
@@ -148,15 +136,15 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
         parent.normalize();
       });
     };
-  }, [doc, anns]);
+  }, [doc, anns, page, pageStart, pageEnd]);
 
-  // Apply active styling to the highlighted mark.
+  // Apply active styling
   useEffect(() => {
     if (!contentRef.current) return;
     contentRef.current.querySelectorAll('mark.cr-highlight').forEach((mk) => {
       mk.classList.toggle('cr-active', mk.dataset.annId === activeId);
     });
-  }, [activeId, anns]);
+  }, [activeId, anns, page]);
 
   function onMouseUp() {
     if (!contentRef.current) return;
@@ -166,7 +154,13 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     const rect = range.getBoundingClientRect();
     const result = selectionToSelector(contentRef.current);
     if (result && result.exact.length > 1) {
-      setDraft({ ...result, rect: { top: rect.bottom + 8, left: rect.left } });
+      // Add page start offset to convert local offsets to global
+      setDraft({
+        ...result,
+        start: result.start + pageStart,
+        end: result.end + pageStart,
+        rect: { top: rect.bottom + 8, left: rect.left },
+      });
     }
   }
 
@@ -205,24 +199,44 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     if (activeId === annId) setActiveId(null);
   }
 
+  // Jump to the page containing an annotation
+  const goToAnnotation = useCallback((ann: Annotation) => {
+    const posSel = ann.target.selector.find((s: any) => s.type === 'TextPositionSelector') as any;
+    if (posSel && typeof posSel.start === 'number') {
+      const pageIdx = findPageForOffset(pages, posSel.start);
+      if (pageIdx >= 0) setCurrentPage(pageIdx);
+    }
+  }, [pages]);
+
   const allTags = useMemo(() => Array.from(new Set(anns.flatMap((a) => a.tags))).sort(), [anns]);
   const presentList = [me, ...presentUsers.filter((u) => u !== me)];
 
-  // Reading progress
-  const [progress, setProgress] = useState(0);
+  // Progress based on current page
+  const progress = pages.length > 0 ? ((currentPage + 1) / pages.length) * 100 : 0;
+
+  // Keyboard navigation
   useEffect(() => {
-    const onScroll = () => {
-      const el = contentRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const total = el.scrollHeight - window.innerHeight;
-      const scrolled = Math.max(0, Math.min(total, -rect.top));
-      setProgress(total > 0 ? (scrolled / total) * 100 : 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (viewMode !== 'reader') return;
+      // Don't intercept if user is typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        e.preventDefault();
+        setCurrentPage((p) => Math.min(p + 1, pages.length - 1));
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        setCurrentPage((p) => Math.max(p - 1, 0));
+      }
     };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [doc]);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewMode, pages.length]);
+
+  // Scroll to top on page change
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [currentPage]);
 
   // Type counts for badges
   const typeCounts = useMemo(() => {
@@ -257,6 +271,11 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
         </div>
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-bold">{doc.title}</h1>
+          {pages.length > 1 && (
+            <span className="text-xs text-slate-400">
+              Page {currentPage + 1} of {pages.length}
+            </span>
+          )}
         </div>
 
         {/* Type count badges */}
@@ -271,17 +290,49 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
           )}
         </div>
 
+        {/* Paginated reading area */}
         <div
+          key={currentPage}
           ref={contentRef}
-          className="cr-prose select-text"
+          className="cr-prose select-text cr-page-animate"
           onMouseUp={onMouseUp}
-          dangerouslySetInnerHTML={{ __html: doc.html }}
+          dangerouslySetInnerHTML={{ __html: page?.html ?? doc.html }}
         />
 
         {doc.html.replace(/<[^>]*>/g, '').trim().length === 0 && (
           <div className="mt-4 p-4 border rounded bg-red-50 text-sm text-red-700">
             ⚠ No selectable text was extracted from this PDF. This can happen with scanned
             PDFs (images only). Try a text-based PDF, or check the server console for ingestion errors.
+          </div>
+        )}
+
+        {/* Page navigation */}
+        {pages.length > 1 && (
+          <div className="flex items-center justify-between mt-6 pb-4">
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+              disabled={currentPage === 0}
+              className="flex items-center gap-1 px-4 py-2 text-sm rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+            >
+              ← Previous
+            </button>
+            <div className="flex items-center gap-1.5">
+              {pages.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setCurrentPage(i)}
+                  className={`w-2 h-2 rounded-full transition ${i === currentPage ? 'bg-slate-700 w-6' : 'bg-slate-300 hover:bg-slate-400'}`}
+                  title={`Page ${i + 1}`}
+                />
+              ))}
+            </div>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(pages.length - 1, p + 1))}
+              disabled={currentPage === pages.length - 1}
+              className="flex items-center gap-1 px-4 py-2 text-sm rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+            >
+              Next →
+            </button>
           </div>
         )}
 
@@ -297,7 +348,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
               <div className="text-xs text-slate-500">Annotating:</div>
               <button onClick={() => setDraft(null)} className="text-xs text-slate-400 hover:text-slate-700">✕</button>
             </div>
-            <div className="text-sm italic mb-3 line-clamp-2">“{draft.exact}”</div>
+            <div className="text-sm italic mb-3 line-clamp-2">"{draft.exact}"</div>
             <div className="flex flex-wrap gap-2 mb-2">
               <select value={draftType} onChange={(e) => setDraftType(e.target.value as AnnotationBodyType)} className="border rounded px-2 py-1 text-sm">
                 <option value="comment">Comment</option>
@@ -342,6 +393,10 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
         <ul className="space-y-3">
           {filtered.map((a) => {
             const replies = anns.filter((r) => r.parentId === a.id);
+            // Determine which page this annotation is on
+            const posSel = a.target.selector.find((s: any) => s.type === 'TextPositionSelector') as any;
+            const annPage = posSel ? findPageForOffset(pages, posSel.start) : -1;
+            const onCurrentPage = annPage === currentPage;
             return (
               <li key={a.id} id={'ann-' + a.id}
                   className={`p-3 border rounded ${activeId === a.id ? 'border-amber-400 bg-amber-50' : 'hover:bg-slate-50'}`}>
@@ -349,21 +404,27 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                   const newId = a.id === activeId ? null : a.id;
                   setActiveId(newId);
                   if (newId) {
-                    // scroll the document highlight into view
-                    const mark = contentRef.current?.querySelector(`mark.cr-highlight[data-ann-id="${a.id}"]`);
-                    mark?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Jump to the annotation's page first
+                    goToAnnotation(a);
                   }
                 }}>
-                  <span className={`text-xs px-1.5 py-0.5 rounded capitalize ${
-                    a.body.type === 'comment' ? 'bg-amber-100 text-amber-700' :
-                    a.body.type === 'question' ? 'bg-blue-100 text-blue-700' :
-                    a.body.type === 'highlight' ? 'bg-emerald-100 text-emerald-700' :
-                    'bg-purple-100 text-purple-700'
-                  }`}>{a.body.type}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-xs px-1.5 py-0.5 rounded capitalize ${
+                      a.body.type === 'comment' ? 'bg-amber-100 text-amber-700' :
+                      a.body.type === 'question' ? 'bg-blue-100 text-blue-700' :
+                      a.body.type === 'highlight' ? 'bg-emerald-100 text-emerald-700' :
+                      'bg-purple-100 text-purple-700'
+                    }`}>{a.body.type}</span>
+                    {annPage >= 0 && (
+                      <span className={`text-xs px-1 py-0.5 rounded ${onCurrentPage ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500'}`} title={`Page ${annPage + 1}`}>
+                        p.{annPage + 1}
+                      </span>
+                    )}
+                  </div>
                   <span className="text-xs text-slate-400">{a.creator}</span>
                 </div>
                 {a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')?.exact && (
-                  <div className="text-xs italic text-slate-500 mt-1 line-clamp-2">“{a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')!.exact}”</div>
+                  <div className="text-xs italic text-slate-500 mt-1 line-clamp-2">"{a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')!.exact}"</div>
                 )}
                 {a.body.value && <div className="mt-1"><Markdown>{a.body.value}</Markdown></div>}
                 {a.tags.length > 0 && (
