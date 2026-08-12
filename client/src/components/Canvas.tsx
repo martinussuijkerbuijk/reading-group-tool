@@ -65,22 +65,26 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
   const latest = useRef({ title: data.title || 'New thought', body: data.body || '' });
   latest.current = { title, body };
 
+  // Sync from external data changes (server/realtime) — NOT from editing toggling.
+  // `editing` is intentionally excluded from deps so clicking Done doesn't reset the display.
   useEffect(() => {
     if (!editing) { setTitle(data.title || 'New thought'); setBody(data.body || ''); }
-  }, [data.title, data.body, editing]);
+  }, [data.title, data.body]);
 
   const save = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      updateCanvasNode(id, { title: latest.current.title, body: latest.current.body }).catch(console.error);
+      const t = latest.current.title, b = latest.current.body;
+      updateCanvasNode(id, { title: t, body: b }).then(() => data.onUpdate?.(id, t, b)).catch(console.error);
     }, 500);
-  }, [id]);
+  }, [id, data]);
 
   // Flush save immediately (used when clicking Done)
   const flushSave = useCallback(() => {
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = undefined; }
-    updateCanvasNode(id, { title: latest.current.title, body: latest.current.body }).catch(console.error);
-  }, [id]);
+    const t = latest.current.title, b = latest.current.body;
+    updateCanvasNode(id, { title: t, body: b }).then(() => data.onUpdate?.(id, t, b)).catch(console.error);
+  }, [id, data]);
 
   if (editing) {
     return (
@@ -150,6 +154,11 @@ function CanvasContent({ docId, annotations, onBack }: {
     deleteCanvasNode(nodeId).catch(console.error);
   }, []);
 
+  // Update a reasoning node's data in the local React Flow state (after save)
+  const handleUpdateNodeData = useCallback((nodeId: string, title: string, body: string) => {
+    setNodes((nds) => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, title, body } } : n));
+  }, []);
+
   // Load saved canvas state
   const loadCanvas = useCallback(async () => {
     const [savedNodes, savedEdges] = await Promise.all([getCanvasNodes(docId), getCanvasEdges(docId)]);
@@ -177,7 +186,7 @@ function CanvasContent({ docId, annotations, onBack }: {
       .map(n => ({
         id: n.id, type: 'reasoning',
         position: { x: n.x, y: n.y }, width: n.width,
-        data: { title: n.title, body: n.body, createdBy: n.createdBy, onDelete: handleDeleteNode },
+        data: { title: n.title, body: n.body, createdBy: n.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
       }));
 
     setNodes([...annNodes, ...reasonNodes]);
@@ -297,7 +306,7 @@ function CanvasContent({ docId, annotations, onBack }: {
     const node = await createReasoningNode(docId, 'New thought', '', center.x - 140, center.y - 50);
     setNodes((nds) => [...nds, {
       id: node.id, type: 'reasoning', position: { x: node.x, y: node.y }, width: node.width,
-      data: { title: node.title, body: node.body, createdBy: node.createdBy, onDelete: handleDeleteNode },
+      data: { title: node.title, body: node.body, createdBy: node.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
     }]);
   }, [docId, reactFlow, handleDeleteNode]);
 
