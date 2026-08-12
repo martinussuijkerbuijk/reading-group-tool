@@ -8,6 +8,7 @@ uploads/
 dist/
 .vite/
 .DS_Store
+.env
 
 # pi-crew orchestration state
 .crew/

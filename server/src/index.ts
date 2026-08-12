@@ -5,7 +5,8 @@ import { serveStatic } from 'hono/bun';
 import db from './db.ts';
 import { pdfToHtml } from './ingest.ts';
 import { join, leave, broadcastAnnotation, broadcastCanvas } from './realtime.ts';
-import type { Annotation, DocumentRecord, Group, CanvasNode, CanvasEdge } from '@cr/shared';
+import { streamChat, getSystemPrompt, hasApiKey } from './ai.ts';
+import type { Annotation, DocumentRecord, Group, CanvasNode, CanvasEdge, AiMessage } from '@cr/shared';
 
 const { upgradeWebSocket, websocket } = createBunWebSocket();
 
@@ -314,6 +315,103 @@ app.put('/api/canvas/nodes/:nodeId', async (c) => {
   const documentId = row.document_id;
   broadcastCanvas(documentId, 'node-updated', rowToCanvasNode(row));
   return c.json(rowToCanvasNode(row));
+});
+
+// ---- AI nodes ----
+
+// Create an AI node
+app.post('/api/documents/:id/canvas/ai-nodes', async (c) => {
+  const documentId = c.req.param('id');
+  const body = await c.req.json();
+  const mode = body.mode === 'brechtian' ? 'brechtian' : body.mode === 'connect' ? 'connect' : 'explain';
+  const node: CanvasNode = {
+    id: newId(), documentId, annotationId: null, nodeType: 'ai',
+    title: null, body: JSON.stringify({ mode }), imageUrl: null,
+    x: Number(body.x ?? 0), y: Number(body.y ?? 0),
+    width: Number(body.width ?? 340), height: null,
+    createdBy: user(c), createdAt: now(),
+  };
+  db.run(
+    'INSERT INTO canvas_nodes (id, document_id, annotation_id, node_type, title, body, image_url, x, y, width, height, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [node.id, node.documentId, node.annotationId, node.nodeType, node.title, node.body, node.imageUrl, node.x, node.y, node.width, node.height, node.createdBy, node.createdAt],
+  );
+  broadcastCanvas(documentId, 'node-created', node);
+  return c.json(node, 201);
+});
+
+// Get conversation history for an AI node
+app.get('/api/canvas/nodes/:nodeId/conversation', (c) => {
+  const rows = db.query('SELECT * FROM ai_conversations WHERE node_id = ? ORDER BY created_at ASC').all(c.req.param('nodeId')) as any[];
+  return c.json(rows.map((r) => ({
+    role: r.role, content: r.content, createdAt: r.created_at,
+  })) as AiMessage[]);
+});
+
+// Stream a chat message to an AI node (Server-Sent Events)
+app.post('/api/canvas/nodes/:nodeId/chat', async (c) => {
+  const nodeId = c.req.param('nodeId');
+  const body = await c.req.json();
+  const userMessage = String(body.message ?? '').trim();
+  if (!userMessage) return c.json({ error: 'message required' }, 400);
+
+  // Get the node and its document
+  const nodeRow = db.query('SELECT * FROM canvas_nodes WHERE id = ?').get(nodeId) as any;
+  if (!nodeRow) return c.json({ error: 'node not found' }, 404);
+  if (nodeRow.node_type !== 'ai') return c.json({ error: 'not an AI node' }, 400);
+
+  const docRow = db.query('SELECT title FROM documents WHERE id = ?').get(nodeRow.document_id) as any;
+  const docTitle = docRow?.title ?? 'a document';
+
+  // Parse mode from node body
+  let mode = 'explain';
+  try { mode = (JSON.parse(nodeRow.body ?? '{}').mode) ?? 'explain'; } catch {}
+
+  if (mode === 'connect') return c.json({ error: 'Connect mode is not yet available' }, 501);
+
+  // Load conversation history
+  const historyRows = db.query('SELECT role, content, created_at FROM ai_conversations WHERE node_id = ? ORDER BY created_at ASC').all(nodeId) as any[];
+  const history: AiMessage[] = historyRows.map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at }));
+
+  // Save the user's message
+  const userMsgId = newId();
+  db.run('INSERT INTO ai_conversations (id, node_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    [userMsgId, nodeId, 'user', userMessage, now()]);
+
+  const systemPrompt = getSystemPrompt(mode, docTitle);
+
+  // Stream the response as SSE
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      try {
+        const fullText = await streamChat(systemPrompt, history, userMessage, (token) => {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`));
+        });
+        // Save the assistant's response
+        const assistantMsgId = newId();
+        db.run('INSERT INTO ai_conversations (id, node_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+          [assistantMsgId, nodeId, 'assistant', fullText, now()]);
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+      } catch (err: any) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: err.message })}\n\n`));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+});
+
+// Check if AI is configured (no key in response, just boolean)
+app.get('/api/ai/status', (c) => {
+  return c.json({ configured: hasApiKey() });
 });
 
 // Delete a canvas node (and its edges explicitly — FK cascade may not work on migrated columns)

@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS canvas_edges (
   UNIQUE(document_id, source_node_id, target_node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_edge_doc ON canvas_edges(document_id);
+
+CREATE TABLE IF NOT EXISTS ai_conversations (
+  id TEXT PRIMARY KEY,
+  node_id TEXT NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_node ON ai_conversations(node_id);
 `);
 
 // Migrations for existing DBs

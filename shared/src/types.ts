@@ -58,7 +58,15 @@ export interface Group {
   createdAt: string;
 }
 
-export type CanvasNodeType = 'annotation' | 'reasoning' | 'image';
+export type CanvasNodeType = 'annotation' | 'reasoning' | 'image' | 'ai';
+
+export type AiMode = 'explain' | 'brechtian' | 'connect';
+
+export interface AiMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
 
 export interface CanvasNode {
   id: string;

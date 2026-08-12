@@ -9,7 +9,8 @@ import '@xyflow/react/dist/style.css';
 import type { Annotation, CanvasNode, CanvasEdge } from '@cr/shared';
 import {
   getCanvasNodes, getCanvasEdges, upsertCanvasNode, updateCanvasNode, deleteCanvasNode,
-  createReasoningNode, createImageNode, createCanvasEdge, deleteCanvasEdge,
+  createReasoningNode, createImageNode, createAiNode, createCanvasEdge, deleteCanvasEdge,
+  getConversation, streamChat,
 } from '../api.ts';
 import { Markdown } from './Markdown.tsx';
 
@@ -190,7 +191,143 @@ function ImageNode({ data, id }: { data: any; id: string }) {
   );
 }
 
-const nodeTypes = { annotation: AnnotationNode, reasoning: ReasoningNode, image: ImageNode };
+// ---- AI node (chat with GLM-5.2, streaming) ----
+const MODE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; placeholder: string }> = {
+  explain:   { label: '📖 Explain',    color: 'text-cyan-700',   bg: 'bg-cyan-50',   border: 'border-cyan-300',   placeholder: 'Ask for an explanation…' },
+  brechtian: { label: '⚡ Brechtian',   color: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-300', placeholder: 'State a claim or idea to dialectically engage…' },
+  connect:   { label: '🔗 Connect',    color: 'text-slate-500',  bg: 'bg-slate-50',  border: 'border-slate-300',  placeholder: 'Not yet available' },
+};
+
+function AiNode({ data, id }: { data: any; id: string }) {
+  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState(data.mode || 'explain');
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load conversation history
+  useEffect(() => {
+    getConversation(id).then((msgs) => setMessages(msgs)).catch(() => {});
+  }, [id]);
+
+  // Auto-scroll on new content
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, streamingText]);
+
+  const send = useCallback(async () => {
+    const msg = input.trim();
+    if (!msg || streaming) return;
+    setInput('');
+    setError(null);
+    setStreaming(true);
+    setStreamingText('');
+    setMessages((m) => [...m, { role: 'user', content: msg }]);
+    try {
+      let full = '';
+      await streamChat(id, msg, (token) => {
+        full += token;
+        setStreamingText(full);
+      });
+      setMessages((m) => [...m, { role: 'assistant', content: full }]);
+      setStreamingText('');
+    } catch (e: any) {
+      setError(e.message || 'Failed to get response');
+    } finally {
+      setStreaming(false);
+    }
+  }, [input, streaming, id]);
+
+  const config = MODE_CONFIG[mode] ?? MODE_CONFIG.explain;
+  const disabled = mode === 'connect';
+
+  return (
+    <div className={`cr-canvas-node ${config.bg} ${config.border} border rounded-lg shadow-sm flex flex-col`} style={{ width: 320, minHeight: 200 }}>
+      <Handle type="target" position={Position.Top} className="!bg-slate-400 !w-2.5 !h-2.5" />
+      <Handle type="source" position={Position.Bottom} className="!bg-slate-400 !w-2.5 !h-2.5" />
+
+      {/* Header with mode selector */}
+      <div className="flex items-center justify-between p-2 border-b border-slate-200/60">
+        <div className="relative">
+          <button
+            onClick={() => setModeMenuOpen(!modeMenuOpen)}
+            className={`text-xs font-medium ${config.color} flex items-center gap-1 hover:opacity-80`}
+          >
+            {config.label} ▾
+          </button>
+          {modeMenuOpen && (
+            <div className="absolute top-full left-0 mt-1 bg-white border rounded shadow-lg z-10 w-40">
+              {Object.entries(MODE_CONFIG).map(([key, cfg]) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    if (key === 'connect') { setModeMenuOpen(false); return; }
+                    setMode(key);
+                    data.onModeChange?.(id, key);
+                    setModeMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-2 py-1.5 text-xs hover:bg-slate-50 ${key === 'connect' ? 'opacity-40 cursor-not-allowed' : ''}`}
+                >
+                  {cfg.label}
+                  {key === 'connect' && <span className="text-slate-400 ml-1">(soon)</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button onClick={() => { if (confirm('Delete this AI node?')) data.onDelete?.(id); }}
+          className="text-xs text-red-400 hover:text-red-600">✕</button>
+      </div>
+
+      {/* Conversation */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-2 space-y-2 max-h-64">
+        {messages.length === 0 && !streamingText && (
+          <div className="text-xs text-slate-400 italic py-2">
+            {disabled ? 'Connect mode is not yet available.' : 'Start a conversation to learn…'}
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={`text-xs rounded p-2 ${m.role === 'user' ? 'bg-white/80 ml-4' : 'bg-white/50 mr-4'}`}>
+            <div className="text-[10px] text-slate-400 mb-0.5 font-medium">{m.role === 'user' ? 'You' : 'AI'}</div>
+            <div className="cr-markdown text-slate-700"><Markdown>{m.content}</Markdown></div>
+          </div>
+        ))}
+        {streamingText && (
+          <div className="text-xs rounded p-2 bg-white/50 mr-4">
+            <div className="text-[10px] text-slate-400 mb-0.5 font-medium">AI<span className="animate-pulse">…</span></div>
+            <div className="cr-markdown text-slate-700"><Markdown>{streamingText}</Markdown></div>
+          </div>
+        )}
+        {error && <div className="text-xs text-red-500 p-2">⚠ {error}</div>}
+      </div>
+
+      {/* Input */}
+      <div className="p-2 border-t border-slate-200/60">
+        <div className="flex gap-1">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            rows={1}
+            disabled={disabled || streaming}
+            placeholder={disabled ? 'Not available' : config.placeholder}
+            className="flex-1 text-xs border rounded px-2 py-1 resize-none outline-none disabled:opacity-50"
+          />
+          <button
+            onClick={send}
+            disabled={disabled || streaming || !input.trim()}
+            className="px-2 py-1 bg-slate-700 text-white text-xs rounded disabled:opacity-30"
+          >Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes = { annotation: AnnotationNode, reasoning: ReasoningNode, image: ImageNode, ai: AiNode };
 
 // ---- Inner component (has access to ReactFlow context) ----
 function CanvasContent({ docId, annotations, onBack }: {
@@ -215,6 +352,12 @@ function CanvasContent({ docId, annotations, onBack }: {
   // Update a reasoning node's data in the local React Flow state (after save)
   const handleUpdateNodeData = useCallback((nodeId: string, title: string, body: string | null) => {
     setNodes((nds) => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...(title !== null && { title }), ...(body !== null && { body }) } } : n));
+  }, []);
+
+  // Update AI node mode (persists to server)
+  const handleAiModeChange = useCallback((nodeId: string, mode: string) => {
+    setNodes((nds) => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, mode } } : n));
+    updateCanvasNode(nodeId, { body: JSON.stringify({ mode }) }).catch(console.error);
   }, []);
 
   // Load saved canvas state
@@ -255,7 +398,19 @@ function CanvasContent({ docId, annotations, onBack }: {
         data: { imageUrl: n.imageUrl, title: n.title, createdBy: n.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
       }));
 
-    setNodes([...annNodes, ...reasonNodes, ...imageNodes]);
+    const aiNodes: Node[] = savedNodes
+      .filter(n => n.nodeType === 'ai')
+      .map(n => {
+        let aiMode = 'explain';
+        try { aiMode = JSON.parse(n.body ?? '{}').mode ?? 'explain'; } catch {}
+        return {
+          id: n.id, type: 'ai',
+          position: { x: n.x, y: n.y }, width: n.width,
+          data: { mode: aiMode, createdBy: n.createdBy, onDelete: handleDeleteNode, onModeChange: handleAiModeChange },
+        };
+      });
+
+    setNodes([...annNodes, ...reasonNodes, ...imageNodes, ...aiNodes]);
 
     const newEdges: Edge[] = savedEdges.map((e) => ({
       id: e.id, source: e.sourceNodeId, target: e.targetNodeId,
@@ -265,7 +420,7 @@ function CanvasContent({ docId, annotations, onBack }: {
     }));
     setEdges(newEdges);
     setLoading(false);
-  }, [docId, annotations, handleDeleteNode, handleUpdateNodeData]);
+  }, [docId, annotations, handleDeleteNode, handleUpdateNodeData, handleAiModeChange]);
 
   useEffect(() => { loadCanvas(); }, [loadCanvas]);
 
@@ -321,7 +476,7 @@ function CanvasContent({ docId, annotations, onBack }: {
       if (change.type === 'position' && change.dragging === false) {
         const node = nodes.find(n => n.id === change.id);
         if (!node) continue;
-        if (node.type === 'reasoning' || node.type === 'image') {
+        if (node.type === 'reasoning' || node.type === 'image' || node.type === 'ai') {
           saveReasoningNodePosition(change.id, change.position.x, change.position.y);
         } else if (node.type === 'annotation') {
           const annId = (node.data as any)?.annotation?.id;
@@ -330,7 +485,7 @@ function CanvasContent({ docId, annotations, onBack }: {
       }
       if (change.type === 'remove') {
         const node = nodes.find(n => n.id === change.id);
-        if (node?.type === 'reasoning' || node?.type === 'image') deleteCanvasNode(change.id).catch(console.error);
+        if (node?.type === 'reasoning' || node?.type === 'image' || node?.type === 'ai') deleteCanvasNode(change.id).catch(console.error);
       }
     }
   }, [nodes, saveAnnotationNodePosition, saveReasoningNodePosition]);
@@ -374,7 +529,7 @@ function CanvasContent({ docId, annotations, onBack }: {
       id: node.id, type: 'reasoning', position: { x: node.x, y: node.y }, width: node.width,
       data: { title: node.title, body: node.body, createdBy: node.createdBy, onDelete: handleDeleteNode, onUpdate: handleUpdateNodeData },
     }]);
-  }, [docId, reactFlow, handleDeleteNode, handleUpdateNodeData]);
+  }, [docId, reactFlow, handleDeleteNode, handleUpdateNodeData, handleAiModeChange]);
 
   // Paste handler — detects image in clipboard and creates an image node
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
@@ -396,12 +551,22 @@ function CanvasContent({ docId, annotations, onBack }: {
         return;
       }
     }
-  }, [docId, reactFlow, handleDeleteNode, handleUpdateNodeData]);
+  }, [docId, reactFlow, handleDeleteNode, handleUpdateNodeData, handleAiModeChange]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [handlePaste]);
+
+  // Add a new AI node at the center of the viewport
+  const handleAddAi = useCallback(async () => {
+    const center = reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    const node = await createAiNode(docId, 'explain', center.x - 160, center.y - 100);
+    setNodes((nds) => [...nds, {
+      id: node.id, type: 'ai', position: { x: node.x, y: node.y }, width: node.width,
+      data: { mode: 'explain', createdBy: node.createdBy, onDelete: handleDeleteNode, onModeChange: handleAiModeChange },
+    }]);
+  }, [docId, reactFlow, handleDeleteNode, handleAiModeChange]);
 
   if (loading) return <div className="p-6 text-slate-500">Loading canvas…</div>;
 
@@ -413,6 +578,10 @@ function CanvasContent({ docId, annotations, onBack }: {
         <button onClick={handleAddReasoning}
           className="px-3 py-1.5 bg-rose-500 text-white rounded text-sm hover:bg-rose-600 flex items-center gap-1">
           + Reasoning node
+        </button>
+        <button onClick={handleAddAi}
+          className="px-3 py-1.5 bg-cyan-600 text-white rounded text-sm hover:bg-cyan-700 flex items-center gap-1">
+          + AI node
         </button>
         <span className="text-xs text-slate-400 ml-auto">Drag nodes · Drag from bottom dot to connect · Double-click to edit · Paste images with Ctrl+V · Select edge + Delete to remove</span>
       </div>
@@ -437,6 +606,7 @@ function CanvasContent({ docId, annotations, onBack }: {
             nodeColor={(n) => {
               if (n.type === 'reasoning') return '#fecaca';
               if (n.type === 'image') return '#cbd5e1';
+              if (n.type === 'ai') return '#a5f3fc';
               const ann = n.data?.annotation as Annotation;
               const t = ann?.body?.type;
               return t === 'question' ? '#bfdbfe' : t === 'highlight' ? '#a7f3d0' : t === 'note' ? '#ddd6fe' : '#fde68a';
