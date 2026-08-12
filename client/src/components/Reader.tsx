@@ -7,7 +7,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
   const [anns, setAnns] = useState<Annotation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ exact: string; prefix?: string; suffix?: string; rect: { top: number; left: number } } | null>(null);
+  const [draft, setDraft] = useState<{ exact: string; prefix?: string; suffix?: string; start: number; end: number; rect: { top: number; left: number } } | null>(null);
   const [draftType, setDraftType] = useState<AnnotationBodyType>('comment');
   const [draftText, setDraftText] = useState('');
   const [draftTags, setDraftTags] = useState('');
@@ -28,8 +28,9 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     onAnnotationDeleted: (id) => setAnns((a) => a.filter((x) => x.id !== id && x.parentId !== id)),
   });
 
-  // ---- Highlight rendering: wrap annotated text in <mark> using TextQuoteSelector ----
-  // Walks text nodes after render; uses prefix/suffix to disambiguate multiple matches.
+  // ---- Highlight rendering: position-based anchoring (primary) with TextQuoteSelector fallback ----
+  // Uses TextPositionSelector (start/end char offsets) for precise anchoring.
+  // Falls back to TextQuoteSelector string matching only if no position selector exists.
   useEffect(() => {
     if (!doc || !contentRef.current || anns.length === 0) return;
     const container = contentRef.current;
@@ -46,51 +47,62 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     }
     const fullText = container.textContent ?? '';
 
-    // For each top-level annotation, find the best match and wrap it.
-    // Process in reverse document order so earlier offsets stay valid.
-    const matches: { start: number; end: number; annId: string }[] = [];
+    const TYPE_COLORS: Record<string, string> = {
+      comment: 'bg-amber-200/60',
+      question: 'bg-blue-200/60',
+      highlight: 'bg-emerald-200/60',
+      note: 'bg-purple-200/60',
+    };
+
+    // Resolve each annotation to a (start, end) character range.
+    const matches: { start: number; end: number; annId: string; type: string }[] = [];
     for (const ann of anns) {
-      if (ann.parentId) continue; // replies don't get their own highlight
-      const sel = ann.target.selector[0];
-      if (!sel?.exact) continue;
+      if (ann.parentId) continue;
+      const posSel = ann.target.selector.find((s: any) => s.type === 'TextPositionSelector') as any;
+      const quoteSel = ann.target.selector.find((s: any) => s.type === 'TextQuoteSelector') as any;
+      if (!quoteSel?.exact) continue;
 
-      // Find candidate positions for the exact string.
-      const positions: number[] = [];
-      let from = 0;
-      while (true) {
-        const idx = fullText.indexOf(sel.exact, from);
-        if (idx === -1) break;
-        positions.push(idx);
-        from = idx + 1;
-      }
-      if (positions.length === 0) continue;
+      let start: number, end: number;
 
-      // Disambiguate using prefix/suffix context.
-      let best = positions[0];
-      let bestScore = -1;
-      for (const pos of positions) {
-        let score = 0;
-        if (sel.prefix) {
-          const ctx = fullText.slice(Math.max(0, pos - sel.prefix.length), pos);
-          if (ctx.endsWith(sel.prefix)) score += 2;
+      if (posSel && typeof posSel.start === 'number') {
+        // Position-based: use the stored offset directly.
+        start = posSel.start;
+        end = posSel.end;
+      } else {
+        // Fallback: find best match by TextQuoteSelector.
+        const positions: number[] = [];
+        let from = 0;
+        while (true) {
+          const idx = fullText.indexOf(quoteSel.exact, from);
+          if (idx === -1) break;
+          positions.push(idx);
+          from = idx + 1;
         }
-        if (sel.suffix) {
-          const ctx = fullText.slice(pos + sel.exact.length, pos + sel.exact.length + sel.suffix.length);
-          if (ctx.startsWith(sel.suffix)) score += 2;
+        if (positions.length === 0) continue;
+        let best = positions[0];
+        let bestScore = -1;
+        for (const pos of positions) {
+          let score = 0;
+          if (quoteSel.prefix) {
+            const ctx = fullText.slice(Math.max(0, pos - quoteSel.prefix.length), pos);
+            if (ctx.endsWith(quoteSel.prefix)) score += 2;
+          }
+          if (quoteSel.suffix) {
+            const ctx = fullText.slice(pos + quoteSel.exact.length, pos + quoteSel.exact.length + quoteSel.suffix.length);
+            if (ctx.startsWith(quoteSel.suffix)) score += 2;
+          }
+          if (score > bestScore) { bestScore = score; best = pos; }
         }
-        if (score > bestScore) { bestScore = score; best = pos; }
+        start = best;
+        end = best + quoteSel.exact.length;
       }
-      matches.push({ start: best, end: best + sel.exact.length, annId: ann.id });
+      matches.push({ start, end, annId: ann.id, type: ann.body.type });
     }
 
     if (matches.length === 0) return;
-
-    // Sort descending by start so we can wrap without invalidating earlier offsets.
     matches.sort((a, b) => b.start - a.start);
 
-    // Map a global character offset to a (textNode, localOffset) pair.
     function offsetToNode(offset: number): { node: Text; local: number } | null {
-      // binary search the last textNode whose start <= offset
       let lo = 0, hi = textNodes.length - 1, ans = -1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
@@ -111,12 +123,11 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
         range.setStart(start.node, start.local);
         range.setEnd(end.node, end.local);
         const mark = document.createElement('mark');
-        mark.className = 'cr-highlight';
+        mark.className = `cr-highlight cr-type-${m.type} ${TYPE_COLORS[m.type] ?? 'bg-amber-200/60'}`;
         mark.dataset.annId = m.annId;
         mark.addEventListener('click', (e) => {
           e.stopPropagation();
           setActiveId(m.annId);
-          // scroll sidebar into view
           document.getElementById('ann-' + m.annId)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         });
         range.surroundContents(mark);
@@ -126,7 +137,6 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     }
 
     return () => {
-      // Cleanup: unwrap any <mark.cr-highlight> we added.
       container.querySelectorAll('mark.cr-highlight').forEach((mk) => {
         const parent = mk.parentNode;
         if (!parent) return;
@@ -153,8 +163,6 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     const rect = range.getBoundingClientRect();
     const result = selectionToSelector(contentRef.current);
     if (result && result.exact.length > 1) {
-      // Position the popover just below the selection end, in viewport coords.
-      // Using fixed positioning so it stays put regardless of scroll.
       setDraft({ ...result, rect: { top: rect.bottom + 8, left: rect.left } });
     }
   }
@@ -165,7 +173,10 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     const ann = await createAnnotation(doc.id, {
       documentId: doc.id, groupId: doc.groupId,
       body: { type: draftType, value: draftText },
-      target: { source: doc.id, selector: [{ type: 'TextQuoteSelector', exact: draft.exact, prefix: draft.prefix, suffix: draft.suffix }] },
+      target: { source: doc.id, selector: [
+        { type: 'TextQuoteSelector', exact: draft.exact, prefix: draft.prefix, suffix: draft.suffix },
+        { type: 'TextPositionSelector', start: draft.start, end: draft.end },
+      ] },
       tags, parentId: null, provenance: 'human',
     });
     setAnns((a) => [...a, ann]);
@@ -194,18 +205,55 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const allTags = useMemo(() => Array.from(new Set(anns.flatMap((a) => a.tags))).sort(), [anns]);
   const presentList = [me, ...presentUsers.filter((u) => u !== me)];
 
+  // Reading progress
+  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    const onScroll = () => {
+      const el = contentRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const total = el.scrollHeight - window.innerHeight;
+      const scrolled = Math.max(0, Math.min(total, -rect.top));
+      setProgress(total > 0 ? (scrolled / total) * 100 : 0);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [doc]);
+
+  // Type counts for badges
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = { comment: 0, question: 0, highlight: 0, note: 0 };
+    anns.filter((a) => !a.parentId).forEach((a) => { counts[a.body.type] = (counts[a.body.type] ?? 0) + 1; });
+    return counts;
+  }, [anns]);
+
   if (!doc) return <div className="p-6 text-slate-500">Loading…</div>;
 
   const top = anns.filter((a) => !a.parentId);
   const filtered = filterType === 'all' ? top : top.filter((a) => a.body.type === filterType);
 
   return (
+    <>
+    <div className="cr-progress" style={{ width: `${progress}%` }} />
     <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8">
       <div>
         <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800 mb-3">← library</button>
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-bold">{doc.title}</h1>
           <PresenceBar users={presentList} me={me} />
+        </div>
+
+        {/* Type count badges */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          {([['comment','Comments','amber'],['question','Questions','blue'],['highlight','Highlights','emerald'],['note','Notes','purple']] as const).map(([type, label, color]) =>
+            typeCounts[type] > 0 && (
+              <button key={type} onClick={() => setFilterType(filterType === type ? 'all' : type as any)}
+                className={`text-xs px-2 py-1 rounded-full transition ${filterType === type ? `bg-${color}-500 text-white` : `bg-${color}-100 text-${color}-700 hover:bg-${color}-200`}`}>
+                {typeCounts[type]} {label}
+              </button>
+            )
+          )}
         </div>
 
         <div
@@ -291,11 +339,16 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                     mark?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                   }
                 }}>
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-slate-200 capitalize">{a.body.type}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded capitalize ${
+                    a.body.type === 'comment' ? 'bg-amber-100 text-amber-700' :
+                    a.body.type === 'question' ? 'bg-blue-100 text-blue-700' :
+                    a.body.type === 'highlight' ? 'bg-emerald-100 text-emerald-700' :
+                    'bg-purple-100 text-purple-700'
+                  }`}>{a.body.type}</span>
                   <span className="text-xs text-slate-400">{a.creator}</span>
                 </div>
-                {a.target.selector[0]?.exact && (
-                  <div className="text-xs italic text-slate-500 mt-1 line-clamp-2">“{a.target.selector[0].exact}”</div>
+                {a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')?.exact && (
+                  <div className="text-xs italic text-slate-500 mt-1 line-clamp-2">“{a.target.selector.find((s: any) => s.type === 'TextQuoteSelector')!.exact}”</div>
                 )}
                 {a.body.value && <div className="text-sm mt-1 whitespace-pre-wrap">{a.body.value}</div>}
                 {a.tags.length > 0 && (
@@ -334,6 +387,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
         </ul>
       </aside>
     </div>
+    </>
   );
 }
 

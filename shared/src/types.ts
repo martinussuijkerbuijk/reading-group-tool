@@ -1,4 +1,4 @@
-// W3C Web Annotation-aligned types (simplified for Phase 0).
+// W3C Web Annotation-aligned types.
 // See https://www.w3.org/TR/annotation-model/
 
 export interface TextQuoteSelector {
@@ -8,9 +8,17 @@ export interface TextQuoteSelector {
   suffix?: string;
 }
 
+export interface TextPositionSelector {
+  type: 'TextPositionSelector';
+  start: number;
+  end: number;
+}
+
+export type Selector = TextQuoteSelector | TextPositionSelector;
+
 export interface AnnotationTarget {
   source: string; // document id
-  selector: TextQuoteSelector[];
+  selector: Selector[];
 }
 
 export type AnnotationBodyType = 'comment' | 'question' | 'highlight' | 'note';

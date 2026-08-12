@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS annotations (
   selector_exact TEXT NOT NULL,
   selector_prefix TEXT,
   selector_suffix TEXT,
+  selector_start INTEGER,
+  selector_end INTEGER,
   tags TEXT NOT NULL DEFAULT '[]',
   parent_id TEXT REFERENCES annotations(id) ON DELETE CASCADE,
   provenance TEXT NOT NULL DEFAULT 'human',
@@ -37,5 +39,9 @@ CREATE TABLE IF NOT EXISTS annotations (
 CREATE INDEX IF NOT EXISTS idx_ann_doc ON annotations(document_id);
 CREATE INDEX IF NOT EXISTS idx_ann_parent ON annotations(parent_id);
 `);
+
+// Migration: add position columns if they don't exist (for existing DBs)
+try { db.exec('ALTER TABLE annotations ADD COLUMN selector_start INTEGER'); } catch {}
+try { db.exec('ALTER TABLE annotations ADD COLUMN selector_end INTEGER'); } catch {}
 
 export default db;

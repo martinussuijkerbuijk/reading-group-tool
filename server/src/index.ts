@@ -85,21 +85,22 @@ app.get('/api/documents/:id', (c) => {
 
 // ---- Annotations ----
 function rowToAnnotation(r: any): Annotation {
+  const selectors: any[] = [{
+    type: 'TextQuoteSelector' as const,
+    exact: r.selector_exact,
+    prefix: r.selector_prefix ?? undefined,
+    suffix: r.selector_suffix ?? undefined,
+  }];
+  if (r.selector_start != null && r.selector_end != null) {
+    selectors.push({ type: 'TextPositionSelector' as const, start: r.selector_start, end: r.selector_end });
+  }
   return {
     id: r.id,
     documentId: r.document_id,
     groupId: r.group_id,
     creator: r.creator,
     body: { type: r.body_type, value: r.body_value },
-    target: {
-      source: r.document_id,
-      selector: [{
-        type: 'TextQuoteSelector' as const,
-        exact: r.selector_exact,
-        prefix: r.selector_prefix ?? undefined,
-        suffix: r.selector_suffix ?? undefined,
-      }],
-    },
+    target: { source: r.document_id, selector: selectors },
     tags: JSON.parse(r.tags ?? '[]'),
     parentId: r.parent_id ?? null,
     provenance: r.provenance ?? 'human',
@@ -115,9 +116,12 @@ app.get('/api/documents/:id/annotations', (c) => {
 app.post('/api/documents/:id/annotations', async (c) => {
   const documentId = c.req.param('id');
   const body = await c.req.json();
-  const sel = body?.target?.selector?.[0];
+  // Extract selectors from the request — support both TextQuoteSelector and TextPositionSelector
+  const selectors = body?.target?.selector ?? [];
+  const quoteSel = selectors.find((s: any) => s.type === 'TextQuoteSelector');
+  const posSel = selectors.find((s: any) => s.type === 'TextPositionSelector');
   // exact may be empty for replies (which inherit the parent's target)
-  if (!sel || typeof sel.exact !== 'string') return c.json({ error: 'target.selector[0].exact required' }, 400);
+  if (!quoteSel || typeof quoteSel.exact !== 'string') return c.json({ error: 'target.selector[0].exact required' }, 400);
 
   const ann: Annotation = {
     id: newId(),
@@ -130,7 +134,12 @@ app.post('/api/documents/:id/annotations', async (c) => {
     },
     target: {
       source: documentId,
-      selector: [{ type: 'TextQuoteSelector', exact: sel.exact, prefix: sel.prefix, suffix: sel.suffix }],
+      selector: posSel
+        ? [
+            { type: 'TextQuoteSelector' as const, exact: quoteSel.exact, prefix: quoteSel.prefix, suffix: quoteSel.suffix },
+            { type: 'TextPositionSelector' as const, start: posSel.start, end: posSel.end },
+          ]
+        : [{ type: 'TextQuoteSelector' as const, exact: quoteSel.exact, prefix: quoteSel.prefix, suffix: quoteSel.suffix }],
     },
     tags: Array.isArray(body?.tags) ? body.tags : [],
     parentId: body?.parentId ?? null,
@@ -138,12 +147,15 @@ app.post('/api/documents/:id/annotations', async (c) => {
     createdAt: now(),
   };
 
+  const qSel = ann.target.selector.find((s: any) => s.type === 'TextQuoteSelector')!;
+  const pSel = ann.target.selector.find((s: any) => s.type === 'TextPositionSelector') as any;
   db.run(
     `INSERT INTO annotations
-     (id, document_id, group_id, creator, body_type, body_value, selector_exact, selector_prefix, selector_suffix, tags, parent_id, provenance, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, document_id, group_id, creator, body_type, body_value, selector_exact, selector_prefix, selector_suffix, selector_start, selector_end, tags, parent_id, provenance, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [ann.id, ann.documentId, ann.groupId, ann.creator, ann.body.type, ann.body.value,
-     ann.target.selector[0].exact, ann.target.selector[0].prefix ?? null, ann.target.selector[0].suffix ?? null,
+     qSel.exact, qSel.prefix ?? null, qSel.suffix ?? null,
+     pSel?.start ?? null, pSel?.end ?? null,
      JSON.stringify(ann.tags), ann.parentId, ann.provenance, ann.createdAt],
   );
   broadcastAnnotation(documentId, 'created', ann);

@@ -49,8 +49,16 @@ export async function deleteAnnotation(annId: string): Promise<void> {
   await fetch(`/api/annotations/${annId}`, { method: 'DELETE', headers: { 'x-user': USER } });
 }
 
-// Build a W3C TextQuoteSelector from the current browser selection within a container.
-export function selectionToSelector(container: HTMLElement): { exact: string; prefix?: string; suffix?: string } | null {
+// Build W3C selectors from the current browser selection within a container.
+// Returns both a TextQuoteSelector (for portability) and a TextPositionSelector
+// (for precise highlight anchoring — fixes the "wrong occurrence" bug).
+export function selectionToSelector(container: HTMLElement): {
+  exact: string;
+  prefix?: string;
+  suffix?: string;
+  start: number;
+  end: number;
+} | null {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
@@ -59,14 +67,13 @@ export function selectionToSelector(container: HTMLElement): { exact: string; pr
   if (!exact) return null;
 
   const fullText = container.textContent ?? '';
-  const start = range.startOffset;
-  // Re-derive offset within full text via a pre-range (robust-ish for Phase 0).
+  // Re-derive offset within full text via a pre-range.
   const pre = document.createRange();
   pre.selectNodeContents(container);
   pre.setEnd(range.startContainer, range.startOffset);
-  const offset = pre.toString().length;
+  const start = pre.toString().length;
 
-  const prefix = fullText.slice(Math.max(0, offset - 32), offset).trimEnd() || undefined;
-  const suffix = fullText.slice(offset + exact.length, offset + exact.length + 32).trimStart() || undefined;
-  return { exact, prefix, suffix };
+  const prefix = fullText.slice(Math.max(0, start - 32), start).trimEnd() || undefined;
+  const suffix = fullText.slice(start + exact.length, start + exact.length + 32).trimStart() || undefined;
+  return { exact, prefix, suffix, start, end: start + exact.length };
 }
