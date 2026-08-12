@@ -61,6 +61,10 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
   const [body, setBody] = useState(data.body || '');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  // Ref to always hold the latest title/body — avoids stale closure in debounced save
+  const latest = useRef({ title: data.title || 'New thought', body: data.body || '' });
+  latest.current = { title, body };
+
   useEffect(() => {
     if (!editing) { setTitle(data.title || 'New thought'); setBody(data.body || ''); }
   }, [data.title, data.body, editing]);
@@ -68,9 +72,15 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
   const save = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      updateCanvasNode(id, { title, body }).catch(console.error);
-    }, 400);
-  }, [id, title, body]);
+      updateCanvasNode(id, { title: latest.current.title, body: latest.current.body }).catch(console.error);
+    }, 500);
+  }, [id]);
+
+  // Flush save immediately (used when clicking Done)
+  const flushSave = useCallback(() => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = undefined; }
+    updateCanvasNode(id, { title: latest.current.title, body: latest.current.body }).catch(console.error);
+  }, [id]);
 
   if (editing) {
     return (
@@ -90,7 +100,7 @@ function ReasoningNode({ data, id }: { data: any; id: string }) {
           placeholder="Your reasoning… (markdown supported)"
         />
         <div className="flex justify-between mt-2">
-          <button onClick={() => setEditing(false)} className="text-xs px-2 py-1 bg-rose-500 text-white rounded">Done</button>
+          <button onClick={() => { flushSave(); setEditing(false); }} className="text-xs px-2 py-1 bg-rose-500 text-white rounded">Done</button>
           <button onClick={() => { if (confirm('Delete this reasoning node?')) { data.onDelete?.(id); } }}
             className="text-xs px-2 py-1 text-red-500 hover:underline">delete</button>
         </div>
