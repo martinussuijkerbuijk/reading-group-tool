@@ -1,5 +1,17 @@
 import { Database } from 'bun:sqlite';
 
+// Bun auto-loads .env from CWD, but the server runs from server/ while .env
+// is in the project root. Load it manually if ZAI_API_KEY isn't set.
+if (!process.env.ZAI_API_KEY) {
+  try {
+    const envText = await Bun.file('../.env').text();
+    for (const line of envText.split('\n')) {
+      const m = line.match(/^([A-Z_]+)=(.+)$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+    }
+  } catch {}
+}
+
 const db = new Database('collective.db', { create: true });
 db.exec('PRAGMA journal_mode = WAL;');
 
