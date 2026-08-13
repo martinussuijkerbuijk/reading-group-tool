@@ -5,8 +5,10 @@
   "workspaces": ["client", "server", "shared"],
   "scripts": {
     "dev:server": "cd server && bun run dev",
-    "dev:client": "cd client && bun run dev",
+    "dev:client": "cd client && rm -rf node_modules/.vite && bun run dev",
+    "dev:client:fast": "cd client && bun run dev",
     "dev": "echo 'Run in two terminals: bun run dev:server  and  bun run dev:client'",
+    "clear-cache": "cd client && rm -rf node_modules/.vite && echo 'Vite cache cleared'",
     "build": "cd client && bun run build"
   }
 }
