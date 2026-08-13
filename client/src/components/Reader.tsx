@@ -6,6 +6,20 @@ import { Markdown } from './Markdown.tsx';
 import { Canvas } from './Canvas.tsx';
 import { splitIntoPages, findPageForOffset, type Page } from '../pagination.ts';
 
+// Map a "lines per page" setting to an approximate character count.
+// ~80 chars per line at the default font; this keeps pagination paragraph-aligned.
+const linesToChars = (lines: number) => Math.round(lines * 80);
+
+// Persisted reader settings
+function useSetting<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [val, setVal] = useState<T>(() => {
+    try { const s = localStorage.getItem(key); return s !== null ? JSON.parse(s) as T : initial; }
+    catch { return initial; }
+  });
+  const set = (v: T) => { setVal(v); try { localStorage.setItem(key, JSON.stringify(v)); } catch {} };
+  return [val, set];
+}
+
 export function Reader({ docId, onBack }: { docId: string; onBack: () => void }) {
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
   const [anns, setAnns] = useState<Annotation[]>([]);
@@ -20,6 +34,12 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [replyText, setReplyText] = useState('');
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // Reader settings (persisted)
+  const [fontSize, setFontSize] = useSetting<number>('cr-font-size', 1.075);
+  const [theme, setTheme] = useSetting<'light' | 'dark'>('cr-theme', 'light');
+  const [linesPerPage, setLinesPerPage] = useSetting<number>('cr-lines-per-page', 35);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // Pagination state
   const [pages, setPages] = useState<Page[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
@@ -27,10 +47,23 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   async function load() {
     const [d, a] = await Promise.all([getDocument(docId), listAnnotations(docId)]);
     setDoc(d); setAnns(a);
-    setPages(splitIntoPages(d.html));
+    setPages(splitIntoPages(d.html, linesToChars(linesPerPage)));
     setCurrentPage(0);
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [docId]);
+
+  // Re-paginate when lines-per-page changes — preserves reading position by
+  // finding the new page that contains the old current page's start offset.
+  // Annotation references stay valid because they store GLOBAL offsets, not page numbers.
+  useEffect(() => {
+    if (!doc) return;
+    const oldStart = pages[currentPage]?.startOffset ?? 0;
+    const newPages = splitIntoPages(doc.html, linesToChars(linesPerPage));
+    const newIdx = findPageForOffset(newPages, oldStart);
+    setPages(newPages);
+    setCurrentPage(newIdx >= 0 ? newIdx : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linesPerPage]);
 
   const { presentUsers, me } = useRealtime(docId, {
     onAnnotationCreated: (ann) => setAnns((a) => a.some((x) => x.id === ann.id) ? a : [...a, ann]),
@@ -257,11 +290,46 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   return (
     <>
     <div className="cr-progress" style={{ width: `${progress}%` }} />
-    <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8">
+    <div className={`max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 ${theme === 'dark' ? 'cr-dark' : ''}`}>
       <div>
         <div className="flex items-center justify-between mb-3">
           <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800">← library</button>
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <button onClick={() => setSettingsOpen(!settingsOpen)}
+                className={`px-2.5 py-1 text-xs rounded-lg border ${settingsOpen ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+                title="Reader settings">⚙</button>
+              {settingsOpen && (
+                <div className="absolute right-0 top-full mt-1 bg-white border rounded-lg shadow-xl p-4 z-50 w-64 space-y-4">
+                  <div>
+                    <div className="text-xs font-medium text-slate-600 mb-1.5">Text size</div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setFontSize(Math.max(0.85, +(fontSize - 0.05).toFixed(2)))}
+                        className="w-7 h-7 border rounded text-sm hover:bg-slate-50">−</button>
+                      <span className="text-xs text-slate-500 w-12 text-center">{Math.round(fontSize * 100)}%</span>
+                      <button onClick={() => setFontSize(Math.min(1.6, +(fontSize + 0.05).toFixed(2)))}
+                        className="w-7 h-7 border rounded text-sm hover:bg-slate-50">+</button>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-slate-600 mb-1.5">Theme</div>
+                    <div className="flex rounded-lg border overflow-hidden">
+                      <button onClick={() => setTheme('light')}
+                        className={`px-3 py-1 text-xs ${theme === 'light' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'}`}>☀ Light</button>
+                      <button onClick={() => setTheme('dark')}
+                        className={`px-3 py-1 text-xs ${theme === 'dark' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'}`}>🌙 Dark</button>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-slate-600 mb-1.5">Lines per page: <span className="text-slate-400">{linesPerPage}</span></div>
+                    <input type="range" min={15} max={60} step={5} value={linesPerPage}
+                      onChange={(e) => setLinesPerPage(Number(e.target.value))}
+                      className="w-full accent-slate-700" />
+                    <div className="flex justify-between text-[10px] text-slate-400 mt-0.5"><span>shorter pages</span><span>longer pages</span></div>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="flex rounded-lg border overflow-hidden">
               <button onClick={() => setViewMode('reader')} className={`px-3 py-1 text-xs ${viewMode === 'reader' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>📖 Reader</button>
               <button onClick={() => setViewMode('canvas')} className={`px-3 py-1 text-xs ${viewMode === 'canvas' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>🔲 Canvas</button>
@@ -295,6 +363,7 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
           key={currentPage}
           ref={contentRef}
           className="cr-prose select-text cr-page-animate"
+          style={{ fontSize: `${fontSize}rem` }}
           onMouseUp={onMouseUp}
           dangerouslySetInnerHTML={{ __html: page?.html ?? doc.html }}
         />

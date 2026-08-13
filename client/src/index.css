@@ -14,13 +14,42 @@ body {
   user-select: text;
   -webkit-user-select: text;
   font-family: Georgia, "Iowan Old Style", "Apple Garamond", "Times New Roman", serif;
+  font-size: 1.075rem; /* default; overridden by inline style from settings */
 }
 .cr-prose p {
   margin: 0 0 1.25em;
   line-height: 1.85;
-  font-size: 1.075rem;
+  font-size: 1em; /* inherit from .cr-prose so text-size setting works */
   color: #1a1a1a;
 }
+
+/* ---- Dark theme ---- applied via .cr-dark on the reader root */
+.cr-dark {
+  background: #18181b;
+  color: #e4e4e7;
+}
+.cr-dark .cr-prose p { color: #e4e4e7; }
+.cr-dark .cr-prose { color: #e4e4e7; }
+/* sidebar + chrome */
+.cr-dark aside { border-color: #3f3f46 !important; }
+.cr-dark .text-slate-400, .cr-dark .text-slate-500, .cr-dark .text-slate-600 { color: #a1a1aa !important; }
+.cr-dark .text-slate-800, .cr-dark .text-slate-900 { color: #e4e4e7 !important; }
+.cr-dark .bg-white { background-color: #232328 !important; }
+.cr-dark .border-slate-200, .cr-dark .border-slate-300 { border-color: #3f3f46 !important; }
+.cr-dark .bg-slate-50, .cr-dark .hover\:bg-slate-50:hover { background-color: #2a2a30 !important; }
+.cr-dark .bg-slate-100 { background-color: #2a2a30 !important; }
+.cr-dark .bg-slate-700 { background-color: #52525b !important; }
+.cr-dark .bg-slate-800 { background-color: #3f3f46 !important; }
+.cr-dark input, .cr-dark textarea, .cr-dark select {
+  background-color: #18181b !important;
+  color: #e4e4e7 !important;
+  border-color: #3f3f46 !important;
+}
+.cr-dark .bg-red-50 { background-color: #3b1414 !important; }
+.cr-dark .text-red-700 { color: #fca5a5 !important; }
+.cr-dark .bg-amber-50 { background-color: #422006 !important; }
+.cr-dark .border-amber-400 { border-color: #f59e0b !important; }
+.cr-dark .text-slate-500:hover { color: #e4e4e7 !important; }
 
 /* Color-coded highlights by annotation type */
 mark.cr-highlight {
