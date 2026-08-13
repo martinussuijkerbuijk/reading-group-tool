@@ -493,6 +493,6 @@ app.get('/ws', upgradeWebSocket((c) => {
 }));
 
 const port = Number(process.env.PORT ?? 3001);
-export default { port, fetch: app.fetch, websocket };
+export default { port, fetch: app.fetch, websocket, idleTimeout: 120 };
 
 console.log(`Collective Reading API → http://localhost:${port}`);
