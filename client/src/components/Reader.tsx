@@ -186,30 +186,38 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     });
   }, [activeId, anns, page]);
 
-  function onMouseUp() {
-    if (!contentRef.current) return;
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    const result = selectionToSelector(contentRef.current);
-    if (result && result.exact.length > 1) {
-      // Add page start offset to convert local offsets to global
-      setDraft({
-        ...result,
-        start: result.start + pageStart,
-        end: result.end + pageStart,
-        rect: { top: rect.bottom + 8, left: rect.left },
-      });
+  // Global mouseup listener so text selection works even when the mouse is
+  // released outside the reading area (e.g., in the sidebar or header).
+  useEffect(() => {
+    function onDocMouseUp() {
+      if (viewMode !== 'reader' || !contentRef.current) return;
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (!contentRef.current.contains(range.commonAncestorContainer)) return;
+      const rect = range.getBoundingClientRect();
+      const result = selectionToSelector(contentRef.current);
+      if (result && result.exact.length > 1) {
+        // Add page start offset to convert local offsets to global
+        setDraft({
+          ...result,
+          start: result.start + pageStart,
+          end: result.end + pageStart,
+          rect: { top: rect.bottom + 8, left: rect.left },
+        });
+      }
     }
-  }
+    document.addEventListener('mouseup', onDocMouseUp);
+    return () => document.removeEventListener('mouseup', onDocMouseUp);
+  }, [viewMode, pageStart]);
 
   async function submitDraft() {
     if (!draft || !doc) return;
-    const tags = draftTags.split(',').map((t) => t.trim()).filter(Boolean);
+    const isHighlight = draftType === 'highlight';
+    const tags = isHighlight ? [] : draftTags.split(',').map((t) => t.trim()).filter(Boolean);
     const ann = await createAnnotation(doc.id, {
       documentId: doc.id, groupId: doc.groupId,
-      body: { type: draftType, value: draftText },
+      body: { type: draftType, value: isHighlight ? '' : draftText },
       target: { source: doc.id, selector: [
         { type: 'TextQuoteSelector', exact: draft.exact, prefix: draft.prefix, suffix: draft.suffix },
         { type: 'TextPositionSelector', start: draft.start, end: draft.end },
@@ -371,7 +379,6 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
           ref={contentRef}
           className="cr-prose select-text cr-page-animate"
           style={{ fontSize: `${fontSize}rem` }}
-          onMouseUp={onMouseUp}
           dangerouslySetInnerHTML={{ __html: page?.html ?? doc.html }}
         />
 
@@ -426,17 +433,25 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
             </div>
             <div className="text-sm italic mb-3 line-clamp-2">"{draft.exact}"</div>
             <div className="flex flex-wrap gap-2 mb-2">
-              <select value={draftType} onChange={(e) => setDraftType(e.target.value as AnnotationBodyType)} className="border rounded px-2 py-1 text-sm">
+              <select value={draftType} onChange={(e) => {
+                const t = e.target.value as AnnotationBodyType;
+                setDraftType(t);
+                if (t === 'highlight') { setDraftText(''); setDraftTags(''); }
+              }} className="border rounded px-2 py-1 text-sm">
                 <option value="comment">Comment</option>
                 <option value="question">Question</option>
                 <option value="highlight">Highlight</option>
                 <option value="note">Note</option>
               </select>
-              <input value={draftTags} onChange={(e) => setDraftTags(e.target.value)} placeholder="tags (comma-separated)"
-                className="border rounded px-2 py-1 text-sm flex-1 min-w-[140px]" />
             </div>
-            <textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} rows={3}
-              placeholder="Your note…  (markdown supported: # heading, [link](url), **bold**)" className="w-full border rounded p-2 text-sm mb-1" />
+            {draftType !== 'highlight' && (
+              <>
+                <input value={draftTags} onChange={(e) => setDraftTags(e.target.value)} placeholder="tags (comma-separated)"
+                  className="border rounded px-2 py-1 text-sm w-full mb-2" />
+                <textarea value={draftText} onChange={(e) => setDraftText(e.target.value)} rows={3}
+                  placeholder="Your note…  (markdown supported: # heading, [link](url), **bold**)" className="w-full border rounded p-2 text-sm mb-1" />
+              </>
+            )}
             <div className="flex gap-2">
               <button onClick={submitDraft} className="px-3 py-1.5 bg-slate-800 text-white rounded text-sm">Save</button>
               <button onClick={() => setDraft(null)} className="px-3 py-1.5 text-sm text-slate-500">Cancel</button>
@@ -509,8 +524,13 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
                   </div>
                 )}
                 <div className="flex items-center gap-3 mt-2">
-                  <button onClick={() => { setReplyTo(replyTo === a.id ? null : a.id); setReplyText(''); }}
-                          className="text-xs text-slate-500 hover:text-slate-800">↩ reply</button>
+                  {replies.length === 0 ? (
+                    <button onClick={() => { setReplyTo(replyTo === a.id ? null : a.id); setReplyText(''); }}
+                            className="text-xs text-slate-500 hover:text-slate-800">↩ reply</button>
+                  ) : (
+                    <button onClick={() => setViewMode('canvas')}
+                            className="text-xs text-blue-600 hover:underline" title="Continue this conversation on the canvas">💬 Continue in Canvas →</button>
+                  )}
                   <span className="text-xs text-slate-400">{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</span>
                   <button onClick={() => remove(a.id)} className="text-xs text-red-500 hover:underline ml-auto">delete</button>
                 </div>

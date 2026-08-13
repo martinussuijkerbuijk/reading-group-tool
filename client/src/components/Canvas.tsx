@@ -34,7 +34,8 @@ function AnnotationNode({ data }: { data: any }) {
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-1.5">
           <span className={`${style.dot} w-2 h-2 rounded-full`} />
-          <span className="text-xs font-medium text-slate-600">{style.label}</span>
+          <span className="text-xs font-medium text-slate-600">{ann.parentId ? 'Reply' : style.label}</span>
+          {ann.parentId && <span className="text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-500">↩</span>}
         </div>
         <span className="text-xs text-slate-400">{ann.creator}</span>
       </div>
@@ -381,21 +382,35 @@ function CanvasContent({ docId, annotations, onBack, theme }: {
     annIdToNodeId.current = new Map();
 
     const annNodeMap = new Map(savedNodes.filter(n => n.annotationId).map(n => [n.annotationId!, n]));
-    const annNodes: Node[] = annotations
-      .filter((a) => !a.parentId)
-      .map((ann, i) => {
-        const saved = annNodeMap.get(ann.id);
-        if (saved) annIdToNodeId.current.set(ann.id, saved.id);
-        const col = i % 3;
-        const row = Math.floor(i / 3);
-        return {
-          id: saved?.id ?? `pending-${ann.id}`,
-          type: 'annotation',
-          position: saved ? { x: saved.x, y: saved.y } : { x: 40 + col * 300, y: 40 + row * 220 },
-          width: saved?.width ?? 260,
-          data: { annotation: ann },
-        };
+    // Build top-level annotation nodes first
+    const topLevel = annotations.filter((a) => !a.parentId);
+    const annNodes: Node[] = topLevel.map((ann, i) => {
+      const saved = annNodeMap.get(ann.id);
+      if (saved) annIdToNodeId.current.set(ann.id, saved.id);
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      return {
+        id: saved?.id ?? `pending-${ann.id}`,
+        type: 'annotation',
+        position: saved ? { x: saved.x, y: saved.y } : { x: 40 + col * 300, y: 40 + row * 220 },
+        width: saved?.width ?? 260,
+        data: { annotation: ann },
+      };
+    });
+
+    // Then replies, positioned just below their parent so the thread is visible
+    const replies = annotations.filter((a) => a.parentId);
+    const posByAnnId = new Map<string, { x: number; y: number }>(annNodes.map(n => [(n.data as any).annotation.id, n.position]));
+    for (const reply of replies) {
+      const parentPos = posByAnnId.get(reply.parentId!);
+      annNodes.push({
+        id: `pending-${reply.id}`,
+        type: 'annotation',
+        position: parentPos ? { x: parentPos.x + 40, y: parentPos.y + 240 } : { x: 40 + (annNodes.length % 3) * 300, y: 40 + Math.floor(annNodes.length / 3) * 220 },
+        width: 260,
+        data: { annotation: reply },
       });
+    }
 
     const reasonNodes: Node[] = savedNodes
       .filter(n => n.nodeType === 'reasoning')
@@ -445,7 +460,7 @@ function CanvasContent({ docId, annotations, onBack, theme }: {
       const existingAnnIds = new Set(prev.filter(n => n.type === 'annotation').map(n => (n.data as any).annotation?.id));
       const newNodes: Node[] = [];
       let i = prev.filter(n => n.type === 'annotation').length;
-      for (const ann of annotations.filter(a => !a.parentId && !existingAnnIds.has(a.id))) {
+      for (const ann of annotations.filter(a => !existingAnnIds.has(a.id))) {
         const col = i % 3; const row = Math.floor(i / 3);
         newNodes.push({
           id: `pending-${ann.id}`, type: 'annotation',
