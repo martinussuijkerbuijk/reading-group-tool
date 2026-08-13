@@ -9,6 +9,12 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Dark theme applied to body/html (set by inline script + Reader effect) */
+.cr-dark body, body.cr-dark, .cr-dark {
+  background: #18181b;
+  color: #e4e4e7;
+}
+
 /* Reading surface — engaging typography */
 .cr-prose {
   user-select: text;
@@ -50,6 +56,18 @@ body {
 .cr-dark .bg-amber-50 { background-color: #422006 !important; }
 .cr-dark .border-amber-400 { border-color: #f59e0b !important; }
 .cr-dark .text-slate-500:hover { color: #e4e4e7 !important; }
+
+/* React Flow dark theme */
+.cr-dark .react-flow { background: #18181b; }
+.cr-dark .react-flow__controls { background: #232328; border-color: #3f3f46; }
+.cr-dark .react-flow__controls-button {
+  background: #232328; border-color: #3f3f46; fill: #a1a1aa;
+}
+.cr-dark .react-flow__controls-button:hover { background: #2a2a30; }
+.cr-dark .react-flow__minimap { background: #232328 !important; }
+.cr-dark .react-flow__attribution { background: transparent; }
+.cr-dark .react-flow__edge-text { fill: #a1a1aa; }
+.cr-dark .react-flow__edge-textbg { fill: #18181b; }
 
 /* Color-coded highlights by annotation type */
 mark.cr-highlight {

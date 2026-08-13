@@ -40,6 +40,12 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [linesPerPage, setLinesPerPage] = useSetting<number>('cr-lines-per-page', 35);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Apply theme to <body> so it covers the whole page (reader, canvas, library)
+  useEffect(() => {
+    document.body.classList.toggle('cr-dark', theme === 'dark');
+    return () => document.body.classList.remove('cr-dark');
+  }, [theme]);
+
   // Pagination state
   const [pages, setPages] = useState<Page[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
@@ -284,13 +290,13 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const filtered = filterType === 'all' ? top : top.filter((a) => a.body.type === filterType);
 
   if (viewMode === 'canvas' && doc) {
-    return <Canvas docId={doc.id} annotations={anns} onBack={() => setViewMode('reader')} />;
+    return <Canvas docId={doc.id} annotations={anns} onBack={() => setViewMode('reader')} theme={theme} />;
   }
 
   return (
     <>
     <div className="cr-progress" style={{ width: `${progress}%` }} />
-    <div className={`max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 ${theme === 'dark' ? 'cr-dark' : ''}`}>
+    <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8">
       <div>
         <div className="flex items-center justify-between mb-3">
           <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800">← library</button>

@@ -330,10 +330,11 @@ function AiNode({ data, id }: { data: any; id: string }) {
 const nodeTypes = { annotation: AnnotationNode, reasoning: ReasoningNode, image: ImageNode, ai: AiNode };
 
 // ---- Inner component (has access to ReactFlow context) ----
-function CanvasContent({ docId, annotations, onBack }: {
+function CanvasContent({ docId, annotations, onBack, theme }: {
   docId: string;
   annotations: Annotation[];
   onBack: () => void;
+  theme: 'light' | 'dark';
 }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -570,8 +571,10 @@ function CanvasContent({ docId, annotations, onBack }: {
 
   if (loading) return <div className="p-6 text-slate-500">Loading canvas…</div>;
 
+  const dark = theme === 'dark';
+
   return (
-    <div className="h-screen flex flex-col">
+    <div className="h-screen flex flex-col" style={{ background: dark ? '#18181b' : '#fff' }}>
       <div className="flex items-center gap-3 p-3 border-b bg-white z-10">
         <button onClick={onBack} className="text-sm text-slate-500 hover:text-slate-800">← back to reader</button>
         <span className="font-semibold text-sm">Canvas View</span>
@@ -600,7 +603,7 @@ function CanvasContent({ docId, annotations, onBack }: {
           defaultEdgeOptions={{ type: 'smoothstep' }}
           deleteKeyCode={['Backspace', 'Delete']}
         >
-          <Background color="#e2e8f0" gap={20} />
+          <Background color={dark ? '#27272a' : '#e2e8f0'} gap={20} />
           <Controls />
           <MiniMap
             nodeColor={(n) => {
@@ -620,7 +623,7 @@ function CanvasContent({ docId, annotations, onBack }: {
 }
 
 // ---- Outer component — wraps in ReactFlowProvider so useReactFlow() works ----
-export function Canvas(props: { docId: string; annotations: Annotation[]; onBack: () => void }) {
+export function Canvas(props: { docId: string; annotations: Annotation[]; onBack: () => void; theme: 'light' | 'dark' }) {
   return (
     <ReactFlowProvider>
       <CanvasContent {...props} />

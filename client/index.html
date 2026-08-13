@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Collective Reading</title>
+    <script>
+      // Apply persisted theme before React loads to prevent flash of light theme
+      try {
+        if (JSON.parse(localStorage.getItem('cr-theme') || '"light"') === 'dark') {
+          document.documentElement.classList.add('cr-dark');
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
