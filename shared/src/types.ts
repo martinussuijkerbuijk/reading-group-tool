@@ -60,7 +60,7 @@ export interface Group {
 
 export type CanvasNodeType = 'annotation' | 'reasoning' | 'image' | 'ai';
 
-export type AiMode = 'explain' | 'brechtian' | 'connect';
+export type AiMode = 'explain' | 'advanced' | 'brechtian' | 'connect';
 
 export interface AiMessage {
   role: 'user' | 'assistant';

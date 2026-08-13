@@ -122,6 +122,10 @@ export async function getAiStatus(): Promise<{ configured: boolean }> {
   const r = await fetch('/api/ai/status');
   return r.json();
 }
+export async function getAiModes(): Promise<Record<string, { label: string; placeholder: string; available: boolean }>> {
+  const r = await fetch('/api/ai/modes');
+  return r.json();
+}
 // Stream a chat message — calls onToken for each token, returns when done.
 export async function streamChat(
   nodeId: string,

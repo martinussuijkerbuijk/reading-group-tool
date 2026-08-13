@@ -1,52 +1,72 @@
 // AI service: streams responses from Z.ai (GLM-5.2) with learning-oriented prompts.
+// Prompts are loaded from prompts.json at the project root so they can be
+// edited without touching code. Restart the server after editing prompts.json.
 import type { AiMessage } from '@cr/shared';
 
 const ZAI_BASE = 'https://api.z.ai/api/paas/v4';
 const MODEL = 'glm-5.2';
+
+// ---- Load prompt config from prompts.json ----
+
+interface ModeConfig {
+  label: string;
+  placeholder: string;
+  available: boolean;
+  systemPrompt: string[];
+}
+
+interface PromptsConfig {
+  modes: Record<string, ModeConfig>;
+}
+
+let _promptsConfig: PromptsConfig | null = null;
+
+async function loadPromptsConfig(): Promise<PromptsConfig> {
+  if (_promptsConfig) return _promptsConfig;
+  try {
+    // Try project root (one level up from server/)
+    const text = await Bun.file('../prompts.json').text();
+    _promptsConfig = JSON.parse(text);
+  } catch {
+    try {
+      // Fallback: CWD
+      const text = await Bun.file('prompts.json').text();
+      _promptsConfig = JSON.parse(text);
+    } catch {
+      console.error('⚠ Could not load prompts.json — using empty config');
+      _promptsConfig = { modes: {} };
+    }
+  }
+  return _promptsConfig;
+}
+
+// Synchronous access for getSystemPrompt (config is loaded at startup)
+export async function getModeConfig(mode: string): Promise<ModeConfig | null> {
+  const cfg = await loadPromptsConfig();
+  return cfg.modes[mode] ?? null;
+}
+
+export async function getAllModes(): Promise<Record<string, ModeConfig>> {
+  const cfg = await loadPromptsConfig();
+  return cfg.modes;
+}
 
 // Check API key is configured
 export function hasApiKey(): boolean {
   return !!process.env.ZAI_API_KEY;
 }
 
-// ---- Prompt design ----
-
-const EXPLAIN_PROMPT = `You are a learning companion in a collective reading group reading "{title}".
-
-The user asks a question. Your role is to build understanding — not deliver a snap answer. Explain by:
-- Connecting to what the reader might already know (prior knowledge)
-- Using an analogy or concrete example
-- Scaffolding from simple to complex
-- Ending with ONE question that checks whether they understood (not the answer itself)
-
-Do NOT give a definitive, closed answer. Open a door, don't close one.
-Keep it to 2-3 paragraphs max. Use markdown for clarity.`;
-
-const BRECHTIAN_PROMPT = `You are a Brechtian dialectical companion in a collective reading group reading "{title}".
-
-Your role is NOT to explain or guide toward understanding. Your role is to DEFAMILIARIZE — to make the familiar strange, expose contradictions, and leave productive tension open.
-
-Techniques:
-- Verfremdungseffekt: show the topic from an estranged, unexpected angle that breaks automatic assumptions
-- Surface contradictions in the user's framing: "You say X — but X naturalizes Y, which is a choice, not a given."
-- Historicize: show that things could be otherwise — this is one configuration among many possible
-- Refuse synthesis: do NOT resolve the tension. Leave the reader in productive discomfort.
-- Never give "the answer." Never reach catharsis.
-
-Be sharp, brief, provocative. 2-3 paragraphs max. Use markdown. The goal is not comfort — it is estrangement that opens thinking.`;
-
-const CONNECT_PROMPT = `You are a connective-thinking companion in a collective reading group reading "{title}".
-Your role is to surface unexpected connections between the user's idea and other concepts, texts, disciplines, or historical moments.
-(Not yet available.)`;
-
-export function getSystemPrompt(mode: string, title: string): string {
+// Build the system prompt for a mode, substituting {title} with the document title.
+export async function getSystemPrompt(mode: string, title: string): Promise<string> {
   const safeTitle = title.replace(/"/g, "'");
-  switch (mode) {
-    case 'explain': return EXPLAIN_PROMPT.replace('{title}', safeTitle);
-    case 'brechtian': return BRECHTIAN_PROMPT.replace('{title}', safeTitle);
-    case 'connect': return CONNECT_PROMPT.replace('{title}', safeTitle);
-    default: return EXPLAIN_PROMPT.replace('{title}', safeTitle);
+  const modeCfg = await getModeConfig(mode);
+  if (!modeCfg) {
+    // Fallback to explain if the mode doesn't exist
+    const explain = await getModeConfig('explain');
+    if (explain) return explain.systemPrompt.join('\n\n').replace('{title}', safeTitle);
+    return `You are a learning companion reading "${safeTitle}".`;
   }
+  return modeCfg.systemPrompt.join('\n\n').replace('{title}', safeTitle);
 }
 
 // Build the messages array for the Z.ai API

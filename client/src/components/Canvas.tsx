@@ -10,7 +10,7 @@ import type { Annotation, CanvasNode, CanvasEdge } from '@cr/shared';
 import {
   getCanvasNodes, getCanvasEdges, upsertCanvasNode, updateCanvasNode, deleteCanvasNode,
   createReasoningNode, createImageNode, createAiNode, createCanvasEdge, deleteCanvasEdge,
-  getConversation, streamChat,
+  getConversation, streamChat, getAiModes,
 } from '../api.ts';
 import { Markdown } from './Markdown.tsx';
 
@@ -192,10 +192,21 @@ function ImageNode({ data, id }: { data: any; id: string }) {
 }
 
 // ---- AI node (chat with GLM-5.2, streaming) ----
-const MODE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; placeholder: string }> = {
-  explain:   { label: '📖 Explain',    color: 'text-cyan-700',   bg: 'bg-cyan-50',   border: 'border-cyan-300',   placeholder: 'Ask for an explanation…' },
-  brechtian: { label: '⚡ Brechtian',   color: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-300', placeholder: 'State a claim or idea to dialectically engage…' },
-  connect:   { label: '🔗 Connect',    color: 'text-slate-500',  bg: 'bg-slate-50',  border: 'border-slate-300',  placeholder: 'Not yet available' },
+// Visual styling per mode (colors stay client-side; labels/placeholders/availability
+// come from the server config in prompts.json via getAiModes()).
+const MODE_COLORS: Record<string, { color: string; bg: string; border: string }> = {
+  explain:   { color: 'text-cyan-700',   bg: 'bg-cyan-50',   border: 'border-cyan-300' },
+  advanced:  { color: 'text-indigo-700', bg: 'bg-indigo-50', border: 'border-indigo-300' },
+  brechtian: { color: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-300' },
+  connect:   { color: 'text-slate-500',  bg: 'bg-slate-50',  border: 'border-slate-300' },
+};
+
+// Fallback mode metadata if the server hasn't loaded yet
+const MODE_FALLBACK: Record<string, { label: string; placeholder: string; available: boolean }> = {
+  explain:   { label: '📖 Explain',    placeholder: 'Ask for an explanation…', available: true },
+  advanced:  { label: '🎓 Advanced',    placeholder: 'Engage at a deeper level…', available: true },
+  brechtian: { label: '⚡ Brechtian',   placeholder: 'State a claim or idea to dialectically engage…', available: true },
+  connect:   { label: '🔗 Connect',     placeholder: 'Not yet available', available: false },
 };
 
 function AiNode({ data, id }: { data: any; id: string }) {
@@ -206,11 +217,13 @@ function AiNode({ data, id }: { data: any; id: string }) {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState(data.mode || 'explain');
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [modeMeta, setModeMeta] = useState<Record<string, { label: string; placeholder: string; available: boolean }>>(MODE_FALLBACK);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Load conversation history
+  // Load conversation history + mode metadata from server config
   useEffect(() => {
     getConversation(id).then((msgs) => setMessages(msgs)).catch(() => {});
+    getAiModes().then((modes) => { if (Object.keys(modes).length > 0) setModeMeta(modes); }).catch(() => {});
   }, [id]);
 
   // Auto-scroll on new content
@@ -241,11 +254,12 @@ function AiNode({ data, id }: { data: any; id: string }) {
     }
   }, [input, streaming, id]);
 
-  const config = MODE_CONFIG[mode] ?? MODE_CONFIG.explain;
-  const disabled = mode === 'connect';
+  const colors = MODE_COLORS[mode] ?? MODE_COLORS.explain;
+  const meta = modeMeta[mode] ?? MODE_FALLBACK[mode] ?? MODE_FALLBACK.explain;
+  const disabled = !meta.available;
 
   return (
-    <div className={`cr-canvas-node ${config.bg} ${config.border} border rounded-lg shadow-sm flex flex-col`} style={{ width: 320, minHeight: 200 }}>
+    <div className={`cr-canvas-node ${colors.bg} ${colors.border} border rounded-lg shadow-sm flex flex-col`} style={{ width: 320, minHeight: 200 }}>
       <Handle type="target" position={Position.Top} className="!bg-slate-400 !w-2.5 !h-2.5" />
       <Handle type="source" position={Position.Bottom} className="!bg-slate-400 !w-2.5 !h-2.5" />
 
@@ -254,25 +268,25 @@ function AiNode({ data, id }: { data: any; id: string }) {
         <div className="relative">
           <button
             onClick={() => setModeMenuOpen(!modeMenuOpen)}
-            className={`text-xs font-medium ${config.color} flex items-center gap-1 hover:opacity-80`}
+            className={`text-xs font-medium ${colors.color} flex items-center gap-1 hover:opacity-80`}
           >
-            {config.label} ▾
+            {meta.label} ▾
           </button>
           {modeMenuOpen && (
-            <div className="absolute top-full left-0 mt-1 bg-white border rounded shadow-lg z-10 w-40">
-              {Object.entries(MODE_CONFIG).map(([key, cfg]) => (
+            <div className="absolute top-full left-0 mt-1 bg-white border rounded shadow-lg z-10 w-44">
+              {Object.entries(modeMeta).map(([key, m]) => (
                 <button
                   key={key}
                   onClick={() => {
-                    if (key === 'connect') { setModeMenuOpen(false); return; }
+                    if (!m.available) { setModeMenuOpen(false); return; }
                     setMode(key);
                     data.onModeChange?.(id, key);
                     setModeMenuOpen(false);
                   }}
-                  className={`w-full text-left px-2 py-1.5 text-xs hover:bg-slate-50 ${key === 'connect' ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  className={`w-full text-left px-2 py-1.5 text-xs hover:bg-slate-50 ${!m.available ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
-                  {cfg.label}
-                  {key === 'connect' && <span className="text-slate-400 ml-1">(soon)</span>}
+                  {m.label}
+                  {!m.available && <span className="text-slate-400 ml-1">(soon)</span>}
                 </button>
               ))}
             </div>
@@ -313,7 +327,7 @@ function AiNode({ data, id }: { data: any; id: string }) {
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
             rows={1}
             disabled={disabled || streaming}
-            placeholder={disabled ? 'Not available' : config.placeholder}
+            placeholder={disabled ? 'Not available' : meta.placeholder}
             className="flex-1 text-xs border rounded px-2 py-1 resize-none outline-none disabled:opacity-50"
           />
           <button

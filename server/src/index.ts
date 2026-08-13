@@ -5,7 +5,7 @@ import { serveStatic } from 'hono/bun';
 import db from './db.ts';
 import { pdfToHtml } from './ingest.ts';
 import { join, leave, broadcastAnnotation, broadcastCanvas } from './realtime.ts';
-import { streamChat, getSystemPrompt, hasApiKey } from './ai.ts';
+import { streamChat, getSystemPrompt, hasApiKey, getAllModes, getModeConfig } from './ai.ts';
 import type { Annotation, DocumentRecord, Group, CanvasNode, CanvasEdge, AiMessage } from '@cr/shared';
 
 const { upgradeWebSocket, websocket } = createBunWebSocket();
@@ -323,7 +323,7 @@ app.put('/api/canvas/nodes/:nodeId', async (c) => {
 app.post('/api/documents/:id/canvas/ai-nodes', async (c) => {
   const documentId = c.req.param('id');
   const body = await c.req.json();
-  const mode = body.mode === 'brechtian' ? 'brechtian' : body.mode === 'connect' ? 'connect' : 'explain';
+  const mode = String(body.mode ?? 'explain');
   const node: CanvasNode = {
     id: newId(), documentId, annotationId: null, nodeType: 'ai',
     title: null, body: JSON.stringify({ mode }), imageUrl: null,
@@ -366,7 +366,9 @@ app.post('/api/canvas/nodes/:nodeId/chat', async (c) => {
   let mode = 'explain';
   try { mode = (JSON.parse(nodeRow.body ?? '{}').mode) ?? 'explain'; } catch {}
 
-  if (mode === 'connect') return c.json({ error: 'Connect mode is not yet available' }, 501);
+  // Check if mode is available (from prompts.json config)
+  const modeCfg = await getModeConfig(mode);
+  if (modeCfg && !modeCfg.available) return c.json({ error: `${modeCfg.label} is not yet available` }, 501);
 
   // Load conversation history
   const historyRows = db.query('SELECT role, content, created_at FROM ai_conversations WHERE node_id = ? ORDER BY created_at ASC').all(nodeId) as any[];
@@ -377,7 +379,7 @@ app.post('/api/canvas/nodes/:nodeId/chat', async (c) => {
   db.run('INSERT INTO ai_conversations (id, node_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
     [userMsgId, nodeId, 'user', userMessage, now()]);
 
-  const systemPrompt = getSystemPrompt(mode, docTitle);
+  const systemPrompt = await getSystemPrompt(mode, docTitle);
 
   // Stream the response as SSE
   const stream = new ReadableStream({
@@ -412,6 +414,16 @@ app.post('/api/canvas/nodes/:nodeId/chat', async (c) => {
 // Check if AI is configured (no key in response, just boolean)
 app.get('/api/ai/status', (c) => {
   return c.json({ configured: hasApiKey() });
+});
+
+// Get AI mode metadata (labels, placeholders, availability) from prompts.json
+app.get('/api/ai/modes', async (c) => {
+  const modes = await getAllModes();
+  const result: Record<string, { label: string; placeholder: string; available: boolean }> = {};
+  for (const [key, cfg] of Object.entries(modes)) {
+    result[key] = { label: cfg.label, placeholder: cfg.placeholder, available: cfg.available };
+  }
+  return c.json(result);
 });
 
 // Delete a canvas node (and its edges explicitly — FK cascade may not work on migrated columns)
