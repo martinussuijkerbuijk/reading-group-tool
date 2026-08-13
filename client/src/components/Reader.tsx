@@ -133,37 +133,39 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
     if (matches.length === 0) return;
     matches.sort((a, b) => b.start - a.start);
 
-    function offsetToNode(offset: number): { node: Text; local: number } | null {
-      let lo = 0, hi = textNodes.length - 1, ans = -1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (textNodes[mid].start <= offset) { ans = mid; lo = mid + 1; }
-        else hi = mid - 1;
-      }
-      if (ans === -1) return null;
-      const tn = textNodes[ans];
-      return { node: tn.node, local: offset - tn.start };
-    }
-
     for (const m of matches) {
-      const start = offsetToNode(m.start);
-      const end = offsetToNode(m.end);
-      if (!start || !end) continue;
-      try {
-        const range = document.createRange();
-        range.setStart(start.node, start.local);
-        range.setEnd(end.node, end.local);
-        const mark = document.createElement('mark');
-        mark.className = `cr-highlight cr-type-${m.type} ${TYPE_COLORS[m.type] ?? 'bg-amber-200/60'}`;
-        mark.dataset.annId = m.annId;
-        mark.addEventListener('click', (e) => {
-          e.stopPropagation();
-          setActiveId(m.annId);
-          document.getElementById('ann-' + m.annId)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
-        range.surroundContents(mark);
-      } catch {
-        // surroundContents fails if range crosses element boundaries; skip gracefully.
+      // Wrap each intersecting text-node segment individually. A single
+      // surroundContents() call throws when the selection spans multiple
+      // <p>/<br> elements (partial element containment), which silently
+      // dropped the highlight. Wrapping one text node at a time avoids this.
+      const intersecting = textNodes.filter((tn) => {
+        const nodeEnd = tn.start + (tn.node.nodeValue?.length ?? 0);
+        return m.start < nodeEnd && m.end > tn.start;
+      });
+      // Process in reverse document order so earlier node references stay
+      // valid after later wraps split their text nodes.
+      for (let i = intersecting.length - 1; i >= 0; i--) {
+        const tn = intersecting[i];
+        const nodeEnd = tn.start + (tn.node.nodeValue?.length ?? 0);
+        const segStart = Math.max(m.start, tn.start);
+        const segEnd = Math.min(m.end, nodeEnd);
+        if (segStart >= segEnd) continue;
+        try {
+          const range = document.createRange();
+          range.setStart(tn.node, segStart - tn.start);
+          range.setEnd(tn.node, segEnd - tn.start);
+          const mark = document.createElement('mark');
+          mark.className = `cr-highlight cr-type-${m.type} ${TYPE_COLORS[m.type] ?? 'bg-amber-200/60'}`;
+          mark.dataset.annId = m.annId;
+          mark.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setActiveId(m.annId);
+            document.getElementById('ann-' + m.annId)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          });
+          range.surroundContents(mark);
+        } catch {
+          // skip gracefully (shouldn't happen now — range is within one text node)
+        }
       }
     }
 
@@ -224,7 +226,9 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
       ] },
       tags, parentId: null, provenance: 'human',
     });
-    setAnns((a) => [...a, ann]);
+    // Dedup: the realtime WebSocket broadcast may already have added this
+    // annotation before the HTTP response resolves.
+    setAnns((a) => a.some((x) => x.id === ann.id) ? a : [...a, ann]);
     setDraft(null); setDraftText(''); setDraftTags('');
     window.getSelection()?.removeAllRanges();
   }
