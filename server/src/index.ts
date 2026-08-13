@@ -168,9 +168,17 @@ app.post('/api/documents/:id/annotations', async (c) => {
 });
 
 app.delete('/api/annotations/:annId', (c) => {
-  const row = db.query('SELECT document_id FROM annotations WHERE id = ?').get(c.req.param('annId')) as any;
-  db.run('DELETE FROM annotations WHERE id = ?', [c.req.param('annId')]);
-  if (row?.document_id) broadcastAnnotation(row.document_id, 'deleted', { id: c.req.param('annId') });
+  const annId = c.req.param('annId');
+  const row = db.query('SELECT document_id FROM annotations WHERE id = ?').get(annId) as any;
+  // Collect reply IDs (for broadcast) before deleting
+  const replies = db.query('SELECT id FROM annotations WHERE parent_id = ?').all(annId) as any[];
+  // FK cascade should handle this, but delete explicitly for robustness
+  db.run('DELETE FROM annotations WHERE parent_id = ?', [annId]);
+  db.run('DELETE FROM annotations WHERE id = ?', [annId]);
+  if (row?.document_id) {
+    broadcastAnnotation(row.document_id, 'deleted', { id: annId });
+    for (const r of replies) broadcastAnnotation(row.document_id, 'deleted', { id: r.id });
+  }
   return c.json({ ok: true });
 });
 

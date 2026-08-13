@@ -442,12 +442,38 @@ function CanvasContent({ docId, annotations, onBack, theme }: {
 
     setNodes([...annNodes, ...reasonNodes, ...imageNodes, ...aiNodes]);
 
+    // Build a map of annotation id -> React Flow node id (for reply edges)
+    const nodeIdByAnnId = new Map<string, string>();
+    for (const n of annNodes) nodeIdByAnnId.set((n.data as any).annotation.id, n.id);
+
     const newEdges: Edge[] = savedEdges.map((e) => ({
       id: e.id, source: e.sourceNodeId, target: e.targetNodeId,
       label: e.label ?? undefined, type: 'smoothstep', animated: true,
       markerEnd: { type: MarkerType.ArrowClosed, color: '#64748b' },
       style: { stroke: '#64748b', strokeWidth: 2 },
     }));
+
+    // Derived reply edges: connect each reply annotation to its parent.
+    // These are synthesized from the parentId relationship (not persisted in
+    // canvas_edges) so the conversation flow is visible.
+    for (const ann of annotations) {
+      if (!ann.parentId) continue;
+      const parentNodeId = nodeIdByAnnId.get(ann.parentId);
+      const replyNodeId = nodeIdByAnnId.get(ann.id);
+      if (!parentNodeId || !replyNodeId) continue;
+      newEdges.push({
+        id: `reply-${ann.id}`,
+        source: parentNodeId,
+        target: replyNodeId,
+        label: 'reply',
+        type: 'smoothstep',
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
+        style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '5 5' },
+        labelStyle: { fill: '#94a3b8', fontSize: 10 },
+      });
+    }
+
     setEdges(newEdges);
     setLoading(false);
   }, [docId, annotations, handleDeleteNode, handleUpdateNodeData, handleAiModeChange]);
@@ -524,7 +550,12 @@ function CanvasContent({ docId, annotations, onBack, theme }: {
     setEdges((eds) => applyEdgeChanges(changes, eds));
     for (const change of changes) {
       if (change.type === 'remove') {
-        for (const id of change.ids ?? [change.id]) deleteCanvasEdge(id).catch(console.error);
+        for (const id of change.ids ?? [change.id]) {
+          // Derived reply edges (id starts with 'reply-') are not persisted;
+          // they are re-derived from the annotation parentId relationship.
+          if (id.startsWith('reply-')) continue;
+          deleteCanvasEdge(id).catch(console.error);
+        }
       }
     }
   }, []);

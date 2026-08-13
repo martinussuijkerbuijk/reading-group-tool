@@ -14,6 +14,7 @@ if (!process.env.ZAI_API_KEY) {
 
 const db = new Database('collective.db', { create: true });
 db.exec('PRAGMA journal_mode = WAL;');
+db.exec('PRAGMA foreign_keys = ON;');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS groups (
@@ -114,6 +115,12 @@ try {
     SELECT id FROM canvas_nodes WHERE canvas_nodes.annotation_id = canvas_edges.target_annotation_id
     AND canvas_nodes.document_id = canvas_edges.document_id
   ) WHERE target_node_id IS NULL AND target_annotation_id IS NOT NULL`);
+} catch {}
+
+// Clean up orphaned replies (replies whose parent was deleted before foreign
+// keys were enabled). This prevents ghost "Reply" nodes from appearing.
+try {
+  db.exec(`DELETE FROM annotations WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM annotations)`);
 } catch {}
 
 export default db;
