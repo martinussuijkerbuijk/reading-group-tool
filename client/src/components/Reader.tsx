@@ -40,10 +40,11 @@ export function Reader({ docId, onBack }: { docId: string; onBack: () => void })
   const [linesPerPage, setLinesPerPage] = useSetting<number>('cr-lines-per-page', 35);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Apply theme to <body> so it covers the whole page (reader, canvas, library)
+  // Apply theme to <html> (documentElement) so it matches the inline script in
+  // index.html and covers the whole page (reader, canvas, library).
   useEffect(() => {
-    document.body.classList.toggle('cr-dark', theme === 'dark');
-    return () => document.body.classList.remove('cr-dark');
+    document.documentElement.classList.toggle('cr-dark', theme === 'dark');
+    return () => document.documentElement.classList.remove('cr-dark');
   }, [theme]);
 
   // Pagination state
