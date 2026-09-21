@@ -495,7 +495,10 @@ app.get('/ws', upgradeWebSocket((c) => {
       peer = join(docId, userName, ws);
     },
     onClose() {
-      if (peer) leave(peer);
+      if (peer) { leave(peer); peer = null; }
+    },
+    onError() {
+      if (peer) { leave(peer); peer = null; }
     },
   };
 }));

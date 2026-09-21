@@ -35,6 +35,7 @@ export function join(docId: string, user: string, ws: WSContext) {
 export function leave(peer: Peer) {
   const room = rooms.get(peer.documentId);
   if (!room) return;
+  if (!room.has(peer)) return; // already left (idempotent — onClose + onError may both fire)
   room.delete(peer);
   if (room.size === 0) rooms.delete(peer.documentId);
   broadcast(peer.documentId, { type: 'peer-left', user: peer.user });
