@@ -25,7 +25,14 @@ export function useRealtime(docId: string, opts: {
 
   useEffect(() => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws?docId=${encodeURIComponent(docId)}&user=${encodeURIComponent(USER)}`;
+    // In dev, Vite serves the frontend on 5173 and the API server on 3001.
+    // Connect the WebSocket directly to the API server to bypass Vite's ws
+    // proxy, which logs noisy ECONNABORTED/ECONNRESET errors when a client
+    // disconnects. In production the frontend and API share an origin.
+    const wsHost = location.port === '5173'
+      ? `${location.hostname}:3001`
+      : location.host;
+    const wsUrl = `${protocol}//${wsHost}/ws?docId=${encodeURIComponent(docId)}&user=${encodeURIComponent(USER)}`;
     const ws = new WebSocket(wsUrl);
     let alive = true;
 
