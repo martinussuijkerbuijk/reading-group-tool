@@ -105,7 +105,12 @@ export async function streamChat(
       messages,
       stream: true,
       temperature: 0.8,
-      max_tokens: 600,
+      max_tokens: 4000,
+      // Disable GLM-5.2's hidden "Deep Thinking" phase. It consumes the
+      // max_tokens budget on invisible reasoning_content before emitting
+      // the visible content, which truncated answers (e.g. just "Great
+      // Question"). The learning tool wants direct, concise answers.
+      thinking: { type: 'disabled' },
     }),
   });
 
