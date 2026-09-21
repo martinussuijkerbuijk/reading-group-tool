@@ -203,6 +203,30 @@ function rowToCanvasEdge(r: any): CanvasEdge {
   };
 }
 
+// Summarize a canvas node's content as text, for use as AI context.
+function summarizeNodeContent(nodeRow: any): string {
+  switch (nodeRow.node_type) {
+    case 'annotation': {
+      const ann = db.query('SELECT body_type, body_value, selector_exact FROM annotations WHERE id = ?').get(nodeRow.annotation_id) as any;
+      if (!ann) return '';
+      const quote = ann.selector_exact ? `\n  quoted: "${ann.selector_exact.slice(0, 200)}"` : '';
+      const note = ann.body_value ? `\n  note: ${ann.body_value.slice(0, 500)}` : '';
+      return `[${ann.body_type} annotation]${quote}${note}`;
+    }
+    case 'reasoning': {
+      const title = nodeRow.title ? `\n  title: ${nodeRow.title}` : '';
+      const body = nodeRow.body ? `\n  body: ${nodeRow.body.slice(0, 500)}` : '';
+      return `[reasoning note]${title}${body}`;
+    }
+    case 'image': {
+      const caption = nodeRow.title ? `\n  caption: ${nodeRow.title}` : '';
+      return `[image]${caption}`;
+    }
+    default:
+      return '';
+  }
+}
+
 // Get all canvas nodes for a document
 app.get('/api/documents/:id/canvas/nodes', (c) => {
   const rows = db.query('SELECT * FROM canvas_nodes WHERE document_id = ?').all(c.req.param('id')) as any[];
@@ -351,7 +375,7 @@ app.post('/api/documents/:id/canvas/ai-nodes', async (c) => {
 app.get('/api/canvas/nodes/:nodeId/conversation', (c) => {
   const rows = db.query('SELECT * FROM ai_conversations WHERE node_id = ? ORDER BY created_at ASC').all(c.req.param('nodeId')) as any[];
   return c.json(rows.map((r) => ({
-    role: r.role, content: r.content, createdAt: r.created_at,
+    role: r.role, content: r.content, reasoning: r.reasoning ?? undefined, createdAt: r.created_at,
   })) as AiMessage[]);
 });
 
@@ -382,25 +406,50 @@ app.post('/api/canvas/nodes/:nodeId/chat', async (c) => {
   const historyRows = db.query('SELECT role, content, created_at FROM ai_conversations WHERE node_id = ? ORDER BY created_at ASC').all(nodeId) as any[];
   const history: AiMessage[] = historyRows.map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at }));
 
+  // Gather content from canvas nodes connected to this AI node (via edges),
+  // so the AI can reason about the annotations/notes it is linked to.
+  const edgeRows = db.query('SELECT source_node_id, target_node_id, label FROM canvas_edges WHERE source_node_id = ? OR target_node_id = ?').all(nodeId, nodeId) as any[];
+  const connectedContext: string[] = [];
+  for (const e of edgeRows) {
+    const otherId = e.source_node_id === nodeId ? e.target_node_id : e.source_node_id;
+    const other = db.query('SELECT * FROM canvas_nodes WHERE id = ?').get(otherId) as any;
+    if (!other || other.node_type === 'ai') continue; // skip AI nodes (avoid recursion)
+    const summary = summarizeNodeContent(other);
+    if (summary) {
+      const rel = e.label ? ` [relation: ${e.label}]` : '';
+      connectedContext.push(summary + rel);
+    }
+  }
+
   // Save the user's message
   const userMsgId = newId();
   db.run('INSERT INTO ai_conversations (id, node_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
     [userMsgId, nodeId, 'user', userMessage, now()]);
 
-  const systemPrompt = await getSystemPrompt(mode, docTitle);
+  let systemPrompt = await getSystemPrompt(mode, docTitle);
+  if (connectedContext.length > 0) {
+    systemPrompt += '\n\nThe following content is from canvas nodes connected to you in this discussion:\n' +
+      connectedContext.map((c) => `- ${c}`).join('\n');
+  }
 
   // Stream the response as SSE
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
       try {
-        const fullText = await streamChat(systemPrompt, history, userMessage, (token) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`));
-        });
-        // Save the assistant's response
+        const { reasoning, content } = await streamChat(
+          systemPrompt, history, userMessage,
+          (rToken) => {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ reasoning: rToken })}\n\n`));
+          },
+          (cToken) => {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token: cToken })}\n\n`));
+          },
+        );
+        // Save the assistant's response (with reasoning chain if present)
         const assistantMsgId = newId();
-        db.run('INSERT INTO ai_conversations (id, node_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
-          [assistantMsgId, nodeId, 'assistant', fullText, now()]);
+        db.run('INSERT INTO ai_conversations (id, node_id, role, content, reasoning, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [assistantMsgId, nodeId, 'assistant', content, reasoning || null, now()]);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
       } catch (err: any) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: err.message })}\n\n`));

@@ -82,13 +82,15 @@ export function buildMessages(systemPrompt: string, history: AiMessage[], userMe
 }
 
 // Stream a chat completion from Z.ai.
-// Calls onToken for each token chunk, returns the full text when done.
+// Calls onReasoning for each reasoning_content token and onContent for each
+// content token, returns both when done.
 export async function streamChat(
   systemPrompt: string,
   history: AiMessage[],
   userMessage: string,
-  onToken: (token: string) => void,
-): Promise<string> {
+  onReasoning: (token: string) => void,
+  onContent: (token: string) => void,
+): Promise<{ reasoning: string; content: string }> {
   const apiKey = process.env.ZAI_API_KEY;
   if (!apiKey) throw new Error('ZAI_API_KEY not configured. Add it to .env');
 
@@ -106,11 +108,9 @@ export async function streamChat(
       stream: true,
       temperature: 0.8,
       max_tokens: 4000,
-      // Disable GLM-5.2's hidden "Deep Thinking" phase. It consumes the
-      // max_tokens budget on invisible reasoning_content before emitting
-      // the visible content, which truncated answers (e.g. just "Great
-      // Question"). The learning tool wants direct, concise answers.
-      thinking: { type: 'disabled' },
+      // Thinking stays enabled (GLM-5.2 default: auto-decides whether to
+      // think). We surface reasoning_content to the user as a collapsible
+      // section rather than discarding it.
     }),
   });
 
@@ -123,7 +123,8 @@ export async function streamChat(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let fullText = '';
+  let reasoning = '';
+  let content = '';
   let buffer = '';
 
   while (true) {
@@ -142,10 +143,14 @@ export async function streamChat(
       if (data === '[DONE]') continue;
       try {
         const parsed = JSON.parse(data);
-        const token = parsed.choices?.[0]?.delta?.content;
-        if (token) {
-          fullText += token;
-          onToken(token);
+        const delta = parsed.choices?.[0]?.delta;
+        if (delta?.reasoning_content) {
+          reasoning += delta.reasoning_content;
+          onReasoning(delta.reasoning_content);
+        }
+        if (delta?.content) {
+          content += delta.content;
+          onContent(delta.content);
         }
       } catch {
         // skip malformed chunks
@@ -153,5 +158,5 @@ export async function streamChat(
     }
   }
 
-  return fullText;
+  return { reasoning, content };
 }

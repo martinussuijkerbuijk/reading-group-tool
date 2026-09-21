@@ -211,10 +211,11 @@ const MODE_FALLBACK: Record<string, { label: string; placeholder: string; availa
 };
 
 function AiNode({ data, id }: { data: any; id: string }) {
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [messages, setMessages] = useState<{ role: string; content: string; reasoning?: string }[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [streamingReasoning, setStreamingReasoning] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState(data.mode || 'explain');
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
@@ -230,7 +231,7 @@ function AiNode({ data, id }: { data: any; id: string }) {
   // Auto-scroll on new content
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, streamingText]);
+  }, [messages, streamingText, streamingReasoning]);
 
   const send = useCallback(async () => {
     const msg = input.trim();
@@ -239,15 +240,18 @@ function AiNode({ data, id }: { data: any; id: string }) {
     setError(null);
     setStreaming(true);
     setStreamingText('');
+    setStreamingReasoning('');
     setMessages((m) => [...m, { role: 'user', content: msg }]);
     try {
+      let fullReasoning = '';
       let full = '';
-      await streamChat(id, msg, (token) => {
-        full += token;
-        setStreamingText(full);
-      });
-      setMessages((m) => [...m, { role: 'assistant', content: full }]);
+      await streamChat(id, msg,
+        (r) => { fullReasoning += r; setStreamingReasoning(fullReasoning); },
+        (t) => { full += t; setStreamingText(full); },
+      );
+      setMessages((m) => [...m, { role: 'assistant', content: full, reasoning: fullReasoning || undefined }]);
       setStreamingText('');
+      setStreamingReasoning('');
     } catch (e: any) {
       setError(e.message || 'Failed to get response');
     } finally {
@@ -307,9 +311,21 @@ function AiNode({ data, id }: { data: any; id: string }) {
         {messages.map((m, i) => (
           <div key={i} className={`text-xs rounded p-2 ${m.role === 'user' ? 'bg-white/80 ml-4' : 'bg-white/50 mr-4'}`}>
             <div className="text-[10px] text-slate-400 mb-0.5 font-medium">{m.role === 'user' ? 'You' : 'AI'}</div>
+            {m.reasoning && (
+              <details className="mb-1">
+                <summary className="text-[10px] text-slate-500 cursor-pointer hover:text-slate-700">🧠 AI reasoning</summary>
+                <div className="text-[11px] text-slate-500 border-l-2 border-slate-300 pl-2 mt-1 whitespace-pre-wrap">{m.reasoning}</div>
+              </details>
+            )}
             <div className="cr-markdown text-slate-700"><Markdown>{m.content}</Markdown></div>
           </div>
         ))}
+        {streamingReasoning && (
+          <details open className="text-xs rounded p-2 bg-white/50 mr-4">
+            <summary className="text-[10px] text-slate-500 cursor-pointer">🧠 AI reasoning<span className="animate-pulse">…</span></summary>
+            <div className="text-[11px] text-slate-500 border-l-2 border-slate-300 pl-2 mt-1 whitespace-pre-wrap">{streamingReasoning}</div>
+          </details>
+        )}
         {streamingText && (
           <div className="text-xs rounded p-2 bg-white/50 mr-4">
             <div className="text-[10px] text-slate-400 mb-0.5 font-medium">AI<span className="animate-pulse">…</span></div>

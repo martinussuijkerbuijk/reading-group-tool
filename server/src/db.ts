@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS ai_conversations (
   node_id TEXT NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
+  reasoning TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_node ON ai_conversations(node_id);
@@ -104,6 +105,7 @@ try { db.exec('ALTER TABLE canvas_nodes ADD COLUMN image_url TEXT'); } catch {}
 // Migrate canvas_edges: add source_node_id / target_node_id if they don't exist
 try { db.exec('ALTER TABLE canvas_edges ADD COLUMN source_node_id TEXT'); } catch {}
 try { db.exec('ALTER TABLE canvas_edges ADD COLUMN target_node_id TEXT'); } catch {}
+try { db.exec('ALTER TABLE ai_conversations ADD COLUMN reasoning TEXT'); } catch {}
 
 // Backfill: copy old annotation-based edge columns to node-based columns
 try {

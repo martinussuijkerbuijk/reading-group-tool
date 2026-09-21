@@ -126,11 +126,13 @@ export async function getAiModes(): Promise<Record<string, { label: string; plac
   const r = await fetch('/api/ai/modes');
   return r.json();
 }
-// Stream a chat message — calls onToken for each token, returns when done.
+// Stream a chat message — calls onReasoning for reasoning_content tokens and
+// onContent for content tokens. Returns when done.
 export async function streamChat(
   nodeId: string,
   message: string,
-  onToken: (token: string) => void,
+  onReasoning: (token: string) => void,
+  onContent: (token: string) => void,
 ): Promise<void> {
   const res = await fetch(`/api/canvas/nodes/${nodeId}/chat`, {
     method: 'POST',
@@ -155,7 +157,8 @@ export async function streamChat(
       if (!trimmed.startsWith('data: ')) continue;
       try {
         const data = JSON.parse(trimmed.slice(6));
-        if (data.token) onToken(data.token);
+        if (data.reasoning) onReasoning(data.reasoning);
+        if (data.token) onContent(data.token);
         if (data.error) throw new Error(data.error);
       } catch (e: any) {
         if (e.message) throw e;

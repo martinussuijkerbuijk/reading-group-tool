@@ -65,6 +65,7 @@ export type AiMode = 'explain' | 'advanced' | 'brechtian' | 'connect';
 export interface AiMessage {
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string;
   createdAt: string;
 }
 
